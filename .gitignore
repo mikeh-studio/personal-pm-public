@@ -1,0 +1,12 @@
+.DS_Store
+
+# Local secrets and per-machine overrides
+.env
+.env.*
+.claude/
+private/
+
+# Local temp and log artifacts
+*.log
+*.tmp
+__pycache__/

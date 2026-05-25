@@ -1,0 +1,124 @@
+{
+  "docs": [
+    {
+      "confidence": 0.94,
+      "created_at": "2026-05-25T08:40:00+08:00",
+      "id": "demo-activation-scorecard",
+      "matched_goals": [
+        "data_owner"
+      ],
+      "matched_keywords": [
+        "activation",
+        "contract",
+        "metric",
+        "quality",
+        "scorecard"
+      ],
+      "matched_projects": [
+        "Data Owner Operating System"
+      ],
+      "modified_at": "2026-05-25T09:05:00+08:00",
+      "owner": "Demo User",
+      "priority_hint": "P1",
+      "reason": "Matches the current activation_rate scorecard task and the data-owner operating system project.",
+      "summary": "Draft scorecard for activation_rate with metric definition, source tables, quality checks, owner, escalation path, and launch-readiness verdict.",
+      "title": "Activation Rate Ownership Scorecard",
+      "url": "https://docs.google.com/document/d/demo-activation-scorecard/edit"
+    },
+    {
+      "confidence": 0.86,
+      "created_at": "2026-05-24T16:20:00+08:00",
+      "id": "demo-inference-capacity-brief",
+      "matched_goals": [
+        "data_owner"
+      ],
+      "matched_keywords": [
+        "capacity",
+        "metric",
+        "quality",
+        "source"
+      ],
+      "matched_projects": [
+        "AI Infrastructure Literacy"
+      ],
+      "modified_at": "2026-05-24T18:10:00+08:00",
+      "owner": "Demo User",
+      "priority_hint": "P2",
+      "reason": "Matches AI infrastructure literacy and today's capacity brief support task.",
+      "summary": "Notes on chat-summary inference demand assumptions, GPU queue symptoms, fallback quality, and capacity escalation triggers.",
+      "title": "Chat Summary Inference Capacity Brief",
+      "url": "https://docs.google.com/document/d/demo-inference-capacity-brief/edit"
+    },
+    {
+      "confidence": 0.79,
+      "created_at": "2026-05-23T11:35:00+08:00",
+      "id": "demo-robotics-loop",
+      "matched_goals": [
+        "experience_design"
+      ],
+      "matched_keywords": [
+        "physical",
+        "robotics",
+        "sensor"
+      ],
+      "matched_projects": [
+        "Robotics Systems Notebook"
+      ],
+      "modified_at": "2026-05-23T12:05:00+08:00",
+      "owner": "Demo User",
+      "priority_hint": "P2",
+      "reason": "Matches the robotics notebook project and the active sensor-to-actuator loop task.",
+      "summary": "Warehouse picker retry loop with gripper-pressure threshold, re-scan actuator response, fail-safe branch, and telemetry fields.",
+      "title": "Warehouse Picker Retry Loop",
+      "url": "https://docs.google.com/document/d/demo-robotics-loop/edit"
+    },
+    {
+      "confidence": 0.74,
+      "created_at": "2026-05-23T09:10:00+08:00",
+      "id": "demo-eval-checklist",
+      "matched_goals": [
+        "data_owner"
+      ],
+      "matched_keywords": [
+        "evaluation",
+        "metric",
+        "quality"
+      ],
+      "matched_projects": [
+        "Data Owner Operating System"
+      ],
+      "modified_at": "2026-05-23T10:25:00+08:00",
+      "owner": "Demo User",
+      "priority_hint": "P2",
+      "reason": "Matches recent evaluation-discipline archive work and data quality checks.",
+      "summary": "Reusable QA checklist for metric freshness, duplicate rows, null-rate threshold, segment drift, owner sign-off, and failure action.",
+      "title": "Metric QA Checklist Template",
+      "url": "https://docs.google.com/document/d/demo-eval-checklist/edit"
+    },
+    {
+      "confidence": 0.62,
+      "created_at": "2026-05-22T19:05:00+08:00",
+      "id": "demo-learning-note",
+      "matched_goals": [
+        "data_owner"
+      ],
+      "matched_keywords": [
+        "data",
+        "metric"
+      ],
+      "matched_projects": [
+        "Public Learning Notes"
+      ],
+      "modified_at": "2026-05-22T19:30:00+08:00",
+      "owner": "Demo User",
+      "priority_hint": "P3",
+      "reason": "Matches optional public learning note work from recent plans.",
+      "summary": "Short note outline turning the activation_rate scorecard into a reusable data-owner rule about launch readiness.",
+      "title": "Data Owner Learning Note Draft",
+      "url": "https://docs.google.com/document/d/demo-learning-note/edit"
+    }
+  ],
+  "generated_at": "2026-05-25T09:30:00+08:00",
+  "lookback_days": 3,
+  "source": "demo_google_drive_cache"
+}
