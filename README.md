@@ -1,6 +1,8 @@
 # Personal PM
 
-Personal PM is a local personal growth coach and lightweight PM system. It turns target goals into a daily task plan, keeps unfinished work visible, and uses completion history to make tomorrow's plan more realistic.
+Personal PM is a local CLI-friendly personal growth coach built around a reusable [`SKILL.md`](public/skill/personal-pm/SKILL.md). Run it with Codex, Claude Code, Gemini CLI, or another agent to convert goals, projects, and backlog into a realistic daily task plan.
+
+It keeps unfinished work visible and uses completion history to make tomorrow's plan more realistic.
 
 It is built for one practical loop:
 
