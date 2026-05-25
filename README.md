@@ -193,7 +193,6 @@ context/recent-drive-docs.json
 ## Documentation Map
 
 - [USAGE.md](USAGE.md): day-to-day operating guide.
-- [PRIVATE_PUBLIC_SPLIT.md](PRIVATE_PUBLIC_SPLIT.md): boundary between private data and shareable package files.
 - [public/skill/personal-pm/SKILL.md](public/skill/personal-pm/SKILL.md): canonical skill behavior.
 - [demo/README.md](demo/README.md): public-safe sample data notes.
 - [templates/README.md](templates/README.md): starter workspace notes.
