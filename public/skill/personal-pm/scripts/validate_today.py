@@ -8,7 +8,6 @@ import sys
 from datetime import date
 from pathlib import Path
 
-
 TASK_TYPES = {
     "interview_prep",
     "project_work",
@@ -88,6 +87,10 @@ def split_metadata(body: str):
     return main, metadata
 
 
+def truthy(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def extract_tasks_section(lines):
     in_tasks = False
     tasks = []
@@ -108,6 +111,61 @@ def extract_plan_date(lines):
         if match:
             return match.group("date")
     return ""
+
+
+def infer_data_dir(path: Path) -> Path:
+    if path.name == "today.md" and path.parent.name == "tasks":
+        return path.parent.parent.resolve()
+    return resolve_data_dir()
+
+
+def string_list(value):
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def load_goal_tied_recent_docs(data_dir: Path):
+    path = data_dir / "context" / "recent-drive-docs.json"
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    if isinstance(payload, list):
+        docs = payload
+    elif isinstance(payload, dict):
+        cache_dates = {
+            str(payload.get("run_date", ""))[:10],
+            str(payload.get("generated_at", ""))[:10],
+        }
+        if expected_date() not in cache_dates:
+            return []
+        docs = payload.get("docs", [])
+    else:
+        docs = []
+    if not isinstance(docs, list):
+        return []
+
+    candidates = []
+    for doc in docs:
+        if not isinstance(doc, dict):
+            continue
+        matched_goals = [goal for goal in string_list(doc.get("matched_goals")) if goal in GOALS]
+        if not matched_goals:
+            continue
+        candidates.append(
+            {
+                "id": str(doc.get("id", "") or "").strip(),
+                "title": str(doc.get("title", "") or "").strip(),
+                "url": str(doc.get("url", "") or "").strip(),
+                "matched_goals": matched_goals,
+            }
+        )
+    return candidates
 
 
 def lane_key(main_text: str) -> str:
@@ -159,7 +217,9 @@ def validate_task_line(line: str, index: int, allow_planner_maintenance: bool):
     backlog = metadata.get("backlog")
     if backlog:
         if not BACKLOG_RE.match(backlog):
-            errors.append(f"Task {index}: invalid backlog '{backlog}' (expected Nd, for example 4d)")
+            errors.append(
+                f"Task {index}: invalid backlog '{backlog}' (expected Nd, for example 4d)"
+            )
         else:
             backlog_days = int(backlog[:-1])
             duration = match.group("duration") or match.group("duration_plain") or ""
@@ -179,7 +239,50 @@ def validate_task_line(line: str, index: int, allow_planner_maintenance: bool):
     return errors
 
 
-def validate(path: Path, task_count: int, allow_planner_maintenance: bool, check_date: bool = True):
+def task_references_doc(main_text: str, metadata: dict, doc: dict) -> bool:
+    title = str(doc.get("title") or "").strip().lower()
+    if not title or title not in main_text.lower():
+        return False
+
+    doc_metadata = metadata.get("doc", "").lower()
+    for value in (doc.get("id"), doc.get("url")):
+        value = str(value or "").strip().lower()
+        if value and value in doc_metadata:
+            return True
+    return False
+
+
+def validate_recent_doc_task(task_records, data_dir: Path):
+    docs = load_goal_tied_recent_docs(data_dir)
+    if not docs:
+        return []
+
+    matching_task_indexes = set()
+    for index, main_text, metadata in task_records:
+        task_goal = metadata.get("goal", "")
+        for doc in docs:
+            if task_goal not in doc["matched_goals"]:
+                continue
+            if task_references_doc(main_text, metadata, doc):
+                matching_task_indexes.add(index)
+
+    if not matching_task_indexes:
+        return [
+            "Expected one task to reference a fresh goal-tied recent doc using the doc title and doc:<id-or-url> metadata"
+        ]
+    if len(matching_task_indexes) > 1:
+        return [f"Expected exactly one recent-doc task, found {len(matching_task_indexes)}"]
+    return []
+
+
+def validate(
+    path: Path,
+    task_count: int,
+    min_task_count: int,
+    allow_planner_maintenance: bool,
+    check_date: bool = True,
+    require_doc_task: bool = False,
+):
     errors = []
 
     if not path.exists():
@@ -195,16 +298,23 @@ def validate(path: Path, task_count: int, allow_planner_maintenance: bool, check
         errors.append(f"Plan date is {plan_date}, expected {current_date}")
 
     tasks = extract_tasks_section(lines)
-    if len(tasks) != task_count:
-        errors.append(f"Expected {task_count} tasks, found {len(tasks)}")
+    if len(tasks) < min_task_count or len(tasks) > task_count:
+        if min_task_count == task_count:
+            errors.append(f"Expected {task_count} tasks, found {len(tasks)}")
+        else:
+            errors.append(
+                f"Expected between {min_task_count} and {task_count} tasks, found {len(tasks)}"
+            )
 
     lanes = {}
+    task_records = []
     for index, line in enumerate(tasks, start=1):
         errors.extend(validate_task_line(line, index, allow_planner_maintenance))
         match = TASK_LINE_RE.match(line.strip())
         if not match:
             continue
-        main_text, _ = split_metadata(match.group("body").strip())
+        main_text, metadata = split_metadata(match.group("body").strip())
+        task_records.append((index, main_text, metadata))
         lane = lane_key(main_text)
         if not lane:
             continue
@@ -213,24 +323,72 @@ def validate(path: Path, task_count: int, allow_planner_maintenance: bool, check
         else:
             lanes[lane] = index
 
+    if require_doc_task:
+        errors.extend(validate_recent_doc_task(task_records, infer_data_dir(path)))
+
     return errors
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate the canonical personal PM daily plan.")
-    parser.add_argument("--data-dir", default=os.environ.get("PERSONAL_PM_DATA_DIR", ""), help="Planner data root. Defaults to PERSONAL_PM_DATA_DIR or private/")
-    parser.add_argument("--file", default="", help="Path to the daily plan file. Overrides --data-dir")
-    parser.add_argument("--task-count", type=int, default=int(os.environ.get("PERSONAL_PM_TASK_COUNT", "5")))
+    parser.add_argument(
+        "--data-dir",
+        default=os.environ.get("PERSONAL_PM_DATA_DIR", ""),
+        help="Planner data root. Defaults to PERSONAL_PM_DATA_DIR or private/",
+    )
+    parser.add_argument(
+        "--file", default="", help="Path to the daily plan file. Overrides --data-dir"
+    )
+    parser.add_argument(
+        "--task-count",
+        type=int,
+        default=int(os.environ.get("PERSONAL_PM_TASK_COUNT", "5")),
+        help="Maximum valid task count",
+    )
+    parser.add_argument(
+        "--min-task-count",
+        type=int,
+        default=int(os.environ.get("PERSONAL_PM_MIN_TASK_COUNT", "1")),
+        help="Minimum valid task count",
+    )
     parser.add_argument("--allow-planner-maintenance", action="store_true")
-    parser.add_argument("--skip-date-check", action="store_true", help="Validate shape without requiring today's date")
-    parser.add_argument("--json", action="store_true", help="Print machine-readable validation output")
+    parser.add_argument(
+        "--skip-date-check",
+        action="store_true",
+        help="Validate shape without requiring today's date",
+    )
+    parser.add_argument(
+        "--require-doc-task",
+        action="store_true",
+        help="Require one task to reference a fresh goal-tied recent doc when available",
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="Print machine-readable validation output"
+    )
     args = parser.parse_args()
 
-    path = Path(args.file).expanduser() if args.file else resolve_data_dir(args.data_dir) / "tasks" / "today.md"
+    if args.min_task_count > args.task_count:
+        parser.error("--min-task-count cannot be greater than --task-count")
+
+    path = (
+        Path(args.file).expanduser()
+        if args.file
+        else resolve_data_dir(args.data_dir) / "tasks" / "today.md"
+    )
     if not path.is_absolute():
         path = Path.cwd() / path
 
-    errors = validate(path, args.task_count, args.allow_planner_maintenance, check_date=not args.skip_date_check)
+    require_doc_task = args.require_doc_task or truthy(
+        os.environ.get("PERSONAL_PM_REQUIRE_DOC_TASK", "")
+    )
+    errors = validate(
+        path,
+        args.task_count,
+        args.min_task_count,
+        args.allow_planner_maintenance,
+        check_date=not args.skip_date_check,
+        require_doc_task=require_doc_task,
+    )
     result = {"ok": not errors, "errors": errors, "file": str(path)}
 
     if args.json:

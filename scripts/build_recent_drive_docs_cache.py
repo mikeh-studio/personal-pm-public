@@ -7,7 +7,7 @@ import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -73,6 +73,46 @@ def iso_or_empty(value):
     return dt.isoformat() if dt else ""
 
 
+def iso_from_dt(value):
+    return value.isoformat() if value else ""
+
+
+def date_from_dt(value, timezone_name="UTC"):
+    if not value:
+        return ""
+    try:
+        target_timezone = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        target_timezone = timezone.utc
+    return value.astimezone(target_timezone).date().isoformat()
+
+
+def latest_time(*values):
+    parsed = [dt for dt in (parse_time(value) for value in values) if dt]
+    return max(parsed) if parsed else None
+
+
+def string_list(value, limit=5):
+    if value in (None, ""):
+        return []
+    if isinstance(value, list):
+        values = value
+    else:
+        text = str(value)
+        values = re.split(r"\n+|(?:^|\s)[-*]\s+", text)
+
+    cleaned = []
+    for item in values:
+        if isinstance(item, dict):
+            item = item.get("text") or item.get("summary") or item.get("title") or ""
+        text = re.sub(r"\s+", " ", str(item)).strip(" -\t")
+        if text:
+            cleaned.append(text[:220])
+        if len(cleaned) >= limit:
+            break
+    return cleaned
+
+
 def tokenize(text: str) -> set[str]:
     return {
         token
@@ -89,18 +129,24 @@ def load_projects(data_dir: Path):
     text = read_text(data_dir / "goals" / "projects.md")
     projects = []
     for row in re.finditer(
-        r"\|\s*([^|]+?)\s*\|\s*(Now|Next|Later)\s*\|\s*(Active|Idea|Paused)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|",
+        r"\|\s*([^|]+?)\s*\|\s*(Now|Next|Later)\s*\|\s*(Active|Idea|Paused|Closed)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|",
         text,
     ):
         name = row.group(1).strip()
         if name == "---":
             continue
+        status = row.group(3).strip()
+        if status in {"Paused", "Closed"}:
+            continue
         body = " ".join(part.strip() for part in row.groups())
-        projects.append({
-            "name": name,
-            "priority": row.group(2).strip(),
-            "terms": tokenize(body),
-        })
+        projects.append(
+            {
+                "name": name,
+                "priority": row.group(2).strip(),
+                "status": status,
+                "terms": tokenize(body),
+            }
+        )
     return projects
 
 
@@ -200,7 +246,9 @@ def score_doc(item, goal_terms, projects):
             matched_keywords.update(list(hits)[:4])
             project_boost += 0.16 if project["priority"] == "Now" else 0.08
 
-    confidence = 0.2 + min(0.36, len(matched_keywords) * 0.06) + len(matched_goals) * 0.12 + project_boost
+    confidence = (
+        0.2 + min(0.36, len(matched_keywords) * 0.06) + len(matched_goals) * 0.12 + project_boost
+    )
     confidence = min(0.98, round(confidence, 2))
     if confidence >= 0.78:
         priority_hint = "P1"
@@ -214,7 +262,9 @@ def score_doc(item, goal_terms, projects):
     if matched_projects:
         reason = f"Matches {matched_projects[0]} and {', '.join(sorted(matched_keywords)[:3])}."
     elif matched_goals:
-        reason = f"Matches {matched_goals[0]} goal terms: {', '.join(sorted(matched_keywords)[:3])}."
+        reason = (
+            f"Matches {matched_goals[0]} goal terms: {', '.join(sorted(matched_keywords)[:3])}."
+        )
     else:
         reason = ""
 
@@ -230,16 +280,27 @@ def score_doc(item, goal_terms, projects):
     }
 
 
-def normalize_doc(item, goal_terms, projects):
+def normalize_doc(item, goal_terms, projects, activity_timezone):
     scored = score_doc(item, goal_terms, projects)
+    created = first_value(item, "created_at", "createdTime", "created")
+    modified = first_value(item, "modified_at", "modifiedTime", "modified")
+    activity = latest_time(created, modified)
     return {
         "id": str(first_value(item, "id", "fileId", "documentId")),
         "title": scored["title"],
         "url": doc_url(item),
-        "created_at": iso_or_empty(first_value(item, "created_at", "createdTime", "created")),
-        "modified_at": iso_or_empty(first_value(item, "modified_at", "modifiedTime", "modified")),
+        "created_at": iso_or_empty(created),
+        "modified_at": iso_or_empty(modified),
+        "activity_at": iso_from_dt(activity),
+        "activity_date": date_from_dt(activity, activity_timezone),
         "owner": owner_name(first_value(item, "owners", "owner")),
         "summary": scored["summary"],
+        "key_points": string_list(
+            first_value(item, "key_points", "keyPoints", "highlights", "bullets")
+        ),
+        "action_items": string_list(
+            first_value(item, "action_items", "actionItems", "next_actions", "nextActions")
+        ),
         "reason": scored["reason"],
         "priority_hint": scored["priority_hint"],
         "confidence": scored["confidence"],
@@ -250,17 +311,44 @@ def normalize_doc(item, goal_terms, projects):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Normalize recent Google Drive document metadata into the Personal PM docs cache.")
-    parser.add_argument("--input", required=True, help="JSON file from a Google Drive connector/API search. Use '-' for stdin.")
-    parser.add_argument("--data-dir", default=os.environ.get("PERSONAL_PM_DATA_DIR", ""), help="Planner data root. Defaults to PERSONAL_PM_DATA_DIR or private/")
-    parser.add_argument("--output", default="", help="Output JSON path. Defaults to DATA_DIR/context/recent-drive-docs.json")
+    parser = argparse.ArgumentParser(
+        description="Normalize recent Google Drive document metadata into the Personal PM docs cache."
+    )
+    parser.add_argument(
+        "--input",
+        required=True,
+        help="JSON file from a Google Drive connector/API search. Use '-' for stdin.",
+    )
+    parser.add_argument(
+        "--data-dir",
+        default=os.environ.get("PERSONAL_PM_DATA_DIR", ""),
+        help="Planner data root. Defaults to PERSONAL_PM_DATA_DIR or private/",
+    )
+    parser.add_argument(
+        "--output",
+        default="",
+        help="Output JSON path. Defaults to DATA_DIR/context/recent-drive-docs.json",
+    )
     parser.add_argument("--lookback-days", type=int, default=3)
+    parser.add_argument(
+        "--run-date",
+        default="",
+        help="Ingest run date in YYYY-MM-DD format. Defaults to today's UTC date.",
+    )
+    parser.add_argument(
+        "--activity-timezone",
+        default="UTC",
+        help="Timezone used to derive activity_date from timestamps.",
+    )
     parser.add_argument("--source", default="google_drive_connector")
     parser.add_argument("--include-unmatched", action="store_true")
     args = parser.parse_args()
 
     data_dir = resolve_data_dir(args.data_dir)
-    raw_text = sys.stdin.read() if args.input == "-" else Path(args.input).read_text(encoding="utf-8")
+    run_date = args.run_date.strip() or datetime.now(timezone.utc).date().isoformat()
+    raw_text = (
+        sys.stdin.read() if args.input == "-" else Path(args.input).read_text(encoding="utf-8")
+    )
     payload = json.loads(raw_text)
     docs = extract_docs(payload)
 
@@ -274,22 +362,30 @@ def main() -> int:
             continue
         created = parse_time(first_value(item, "created_at", "createdTime", "created"))
         modified = parse_time(first_value(item, "modified_at", "modifiedTime", "modified"))
-        compare_dt = created or modified
+        compare_dt = max([dt for dt in (created, modified) if dt], default=None)
         if compare_dt and compare_dt < cutoff:
             continue
-        doc = normalize_doc(item, goal_terms, projects)
+        doc = normalize_doc(item, goal_terms, projects, args.activity_timezone)
         if args.include_unmatched or doc["matched_goals"] or doc["matched_projects"]:
             normalized.append(doc)
 
-    normalized.sort(key=lambda d: d.get("created_at") or d.get("modified_at") or "", reverse=True)
+    normalized.sort(
+        key=lambda d: d.get("activity_at") or d.get("created_at") or d.get("modified_at") or "",
+        reverse=True,
+    )
     output = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "run_date": run_date,
         "source": args.source,
         "lookback_days": args.lookback_days,
         "docs": normalized,
     }
 
-    output_path = Path(args.output).expanduser() if args.output else data_dir / "context" / "recent-drive-docs.json"
+    output_path = (
+        Path(args.output).expanduser()
+        if args.output
+        else data_dir / "context" / "recent-drive-docs.json"
+    )
     if not output_path.is_absolute():
         output_path = REPO_ROOT / output_path
     output_path.parent.mkdir(parents=True, exist_ok=True)
