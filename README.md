@@ -100,7 +100,7 @@ If port `5151` is busy, choose another local port.
 
 When you open the app and there is no weekly focus for the current week (or no overall goals yet), the Today tab shows a short guided setup. Pick a runner (Codex, Claude Code, or Gemini CLI — the same runners as "Run Today's Flow"), answer 3-5 questions tailored to your goals and projects, and it drafts a weekly focus you can edit on the Weekly tab.
 
-- The selected agent CLI runs read-only and only returns JSON; it never edits files.
+- The selected agent CLI receives your current goal/project/week context and your answers; it runs read-only and only returns JSON, so it never edits files directly.
 - Requires that runner's CLI on your `PATH`, or set `PERSONAL_PM_CODEX_BIN` / `PERSONAL_PM_CLAUDE_BIN` / `PERSONAL_PM_GEMINI_BIN`. Defaults to Codex.
 - Set `PERSONAL_PM_ONBOARDING_MODEL` to pick a specific model for this step.
 - You can skip it for the session, or choose "set it up manually" to use the Weekly tab form.

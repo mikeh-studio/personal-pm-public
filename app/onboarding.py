@@ -256,7 +256,7 @@ def build_planner_context():
     disciplines = [d.get("name", "") for d in goals.get("disciplines", []) if d.get("name")]
 
     projects = parse_projects() or []
-    active = [p for p in projects if p.get("priority") == "Now" or p.get("status") == "Active"]
+    active = [p for p in projects if p.get("status") not in {"Paused", "Closed"}]
     project_lines = []
     for p in active[:8]:
         line = f"- {p.get('name', '')} ({p.get('priority', '')}/{p.get('status', '')})"

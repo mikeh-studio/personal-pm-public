@@ -186,7 +186,7 @@ Reference shapes:
 
 ## Weekly Focus Setup (App)
 - Separate from this planner skill, the local app offers a first-run guided setup when `DATA_DIR/context/weekly-focus.md` has no entry for the current week (or `goals/goal.md` has no overall goals).
-- It runs a user-selected agent CLI (Codex, Claude Code, or Gemini CLI; same runners as the daily flow) read-only to draft questions and synthesize the weekly focus, then writes `context/weekly-focus.md` (and `goals/goal.md` only when goals are missing).
+- It sends the selected CLI the current goal/project/week context and setup answers, runs that CLI read-only to draft questions and synthesize the weekly focus, then writes `context/weekly-focus.md` (and `goals/goal.md` only when goals are missing).
 - This skill still reads the weekly focus as a normal planning input; it does not invoke that setup itself.
 
 ## References

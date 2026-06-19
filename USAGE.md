@@ -255,7 +255,7 @@ How it works:
 4. The app asks the CLI to synthesize a weekly focus (and overall goals only when none exist), then writes it to `context/weekly-focus.md` (and `goals/goal.md` when needed).
 5. You land on the Today view; edit the result anytime on the Weekly tab.
 
-The CLI is run read-only and asked to return JSON only — it never edits files. The server validates the JSON before writing.
+The CLI receives your current goal/project/week context and your answers. It is run read-only and asked to return JSON only, so it never edits files directly; the server validates the JSON before writing.
 
 Configuration:
 
