@@ -4,9 +4,15 @@
 .env
 .env.*
 .claude/
+.obsidian/
 private/
 
 # Local temp and log artifacts
 *.log
 *.tmp
+github_sync.json
+github_sync_map.json
+github_sync_map.json.tmp
 __pycache__/
+.ruff_cache/
+.gstack/

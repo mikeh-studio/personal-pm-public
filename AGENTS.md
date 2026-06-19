@@ -8,4 +8,6 @@ Keep real goals, tasks, archives, logs, external-source caches, local scheduler 
 
 Reusable app, script, validator, and interface code should resolve planner data through `PERSONAL_PM_DATA_DIR` when it is set, defaulting to `private/` for this local workspace. Use `demo/` for public-safe examples and `templates/` for blank starter data.
 
+The app includes a first-run guided weekly setup (`app/onboarding.py`, served by `/api/onboarding/*`). It sends the selected agent CLI current goal/project/week context and setup answers, runs that CLI read-only to draft a weekly focus, validates the returned JSON, and writes it through the normal parser writers. Treat any model output it returns as untrusted data: validate before persisting and never execute it.
+
 If you are working in a maintainer's private checkout with local-only agent instructions, read those before changing private planner behavior or automation. Those files are not part of the public repository contract.

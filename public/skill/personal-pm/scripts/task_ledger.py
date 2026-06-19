@@ -6,7 +6,6 @@ import os
 import re
 from pathlib import Path
 
-
 CSV_FIELDS = [
     "date",
     "task_text",
@@ -43,6 +42,9 @@ SUB_CATEGORIES = {
     "physical_ai",
     "career_assets",
 }
+
+CANCELED_STATUSES = {"cancel", "canceled", "cancelled"}
+DELETED_STATUSES = {"delete", "deleted", "removed"}
 
 TASK_LINE_RE = re.compile(
     r"^- \[(?P<done>[ xX])\]\s*"
@@ -165,6 +167,15 @@ def split_metadata(body: str):
     return main, metadata
 
 
+def normalize_status(value: str) -> str:
+    token = normalize_token(value)
+    if token in CANCELED_STATUSES:
+        return "canceled"
+    if token in DELETED_STATUSES:
+        return "deleted"
+    return ""
+
+
 def split_task_and_project(main_text: str):
     if " — " in main_text:
         task_text, project = main_text.split(" — ", 1)
@@ -177,17 +188,46 @@ def split_task_and_project(main_text: str):
 def infer_task_type(task_text: str, project: str) -> str:
     combined = f"{task_text} {project}".lower()
 
-    if any(term in combined for term in ["apply to", "application", "role", "completed coding interview", "coding interview"]):
+    if any(
+        term in combined
+        for term in [
+            "apply to",
+            "application",
+            "role",
+            "completed coding interview",
+            "coding interview",
+        ]
+    ):
         return "career"
-    if any(term in combined for term in ["interview prep", "mock case", "timed case", "behavioral", "star story", "assessment test", "case study"]):
+    if any(
+        term in combined
+        for term in [
+            "interview prep",
+            "mock case",
+            "timed case",
+            "behavioral",
+            "star story",
+            "assessment test",
+            "case study",
+        ]
+    ):
         return "interview_prep"
     if any(term in combined for term in ["writeup", "blog topic", "weekly writeup"]):
         return "writing"
-    if any(term in combined for term in ["read one current piece", "research-report", "guide", "suggested reads"]):
+    if any(
+        term in combined
+        for term in ["read one current piece", "research-report", "guide", "suggested reads"]
+    ):
         return "research"
-    if any(term in combined for term in ["collect 2 reference artifacts", "experience design exploration"]):
+    if any(
+        term in combined
+        for term in ["collect 2 reference artifacts", "experience design exploration"]
+    ):
         return "design_exploration"
-    if any(term in combined for term in ["python", "sql", "drill", "exercise", "practice", "learn figma basics"]):
+    if any(
+        term in combined
+        for term in ["python", "sql", "drill", "exercise", "practice", "learn figma basics"]
+    ):
         return "skill_practice"
     return "project_work"
 
@@ -199,15 +239,42 @@ def infer_sub_category(task_text: str, project: str, task_type: str) -> str:
         return "career_assets"
     if any(term in combined for term in ["physical ai", "ai + experience design exploration"]):
         return "physical_ai"
-    if any(term in combined for term in ["website", "figma", "project stories", "launch checklist", "content scope", "homepage", "case-study section"]):
+    if any(
+        term in combined
+        for term in [
+            "website",
+            "figma",
+            "project stories",
+            "launch checklist",
+            "content scope",
+            "homepage",
+            "case-study section",
+        ]
+    ):
         return "website"
     if task_type == "writing" or "writeup" in combined or "blog topic" in combined:
         return "writing"
-    if any(term in combined for term in ["labeling", "eval", "evaluation discipline", "grading", "trace grading"]):
+    if any(
+        term in combined
+        for term in ["labeling", "eval", "evaluation discipline", "grading", "trace grading"]
+    ):
         return "evaluation_discipline"
-    if any(term in combined for term in ["python", "sql", "data foundation", "analytics exercise", "skill practice"]):
+    if any(
+        term in combined
+        for term in ["python", "sql", "data foundation", "analytics exercise", "skill practice"]
+    ):
         return "data_foundation"
-    if any(term in combined for term in ["service-platform eng", "service / platform", "parser", "api", "queue", "retries"]):
+    if any(
+        term in combined
+        for term in [
+            "service-platform eng",
+            "service / platform",
+            "parser",
+            "api",
+            "queue",
+            "retries",
+        ]
+    ):
         return "service_platform_eng"
     return "decision_science"
 
@@ -216,7 +283,11 @@ def infer_goal(project: str, sub_category: str) -> str:
     project_lower = project.lower()
     if sub_category in {"website", "physical_ai"}:
         return "experience_design"
-    if "experience design" in project_lower or "personal website" in project_lower or "figma" in project_lower:
+    if (
+        "experience design" in project_lower
+        or "personal website" in project_lower
+        or "figma" in project_lower
+    ):
         return "experience_design"
     return "data_owner"
 
@@ -233,13 +304,26 @@ def parse_task_line(line: str, date: str, source: str):
 
     main_text, metadata = split_metadata(body)
     task_text, project = split_task_and_project(main_text)
+    explicit_status = normalize_status(metadata.get("status", ""))
 
-    if not done:
+    if explicit_status in {"canceled", "deleted"} or not done:
         return None
 
-    task_type = normalize_task_type(metadata["type"]) if "type" in metadata else infer_task_type(task_text, project)
-    sub_category = normalize_sub_category(metadata["sub"]) if "sub" in metadata else infer_sub_category(task_text, project, task_type)
-    goal = normalize_goal(metadata["goal"]) if "goal" in metadata else infer_goal(project, sub_category)
+    task_type = (
+        normalize_task_type(metadata["type"])
+        if "type" in metadata
+        else infer_task_type(task_text, project)
+    )
+    sub_category = (
+        normalize_sub_category(metadata["sub"])
+        if "sub" in metadata
+        else infer_sub_category(task_text, project, task_type)
+    )
+    goal = (
+        normalize_goal(metadata["goal"])
+        if "goal" in metadata
+        else infer_goal(project, sub_category)
+    )
 
     return {
         "date": date,
@@ -299,10 +383,20 @@ def rows_from_archive(archive_path: Path, source: str, only_date: str = ""):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build and maintain the structured personal PM task ledger.")
-    parser.add_argument("--data-dir", default="", help="Planner data root. Defaults to PERSONAL_PM_DATA_DIR or private/")
-    parser.add_argument("--archive", default="", help="Archive log path. Defaults to DATA_DIR/tasks/archive/log.md")
-    parser.add_argument("--ledger", default="", help="Task ledger path. Defaults to DATA_DIR/data/task_log.csv")
+    parser = argparse.ArgumentParser(
+        description="Build and maintain the structured personal PM task ledger."
+    )
+    parser.add_argument(
+        "--data-dir",
+        default="",
+        help="Planner data root. Defaults to PERSONAL_PM_DATA_DIR or private/",
+    )
+    parser.add_argument(
+        "--archive", default="", help="Archive log path. Defaults to DATA_DIR/tasks/archive/log.md"
+    )
+    parser.add_argument(
+        "--ledger", default="", help="Task ledger path. Defaults to DATA_DIR/data/task_log.csv"
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("ensure-ledger")
@@ -314,8 +408,14 @@ def main():
 
     args = parser.parse_args()
     data_dir = resolve_data_dir(args.data_dir or os.environ.get("PERSONAL_PM_DATA_DIR", ""))
-    archive_path = Path(args.archive).expanduser() if args.archive else data_dir / "tasks" / "archive" / "log.md"
-    ledger_path = Path(args.ledger).expanduser() if args.ledger else data_dir / "data" / "task_log.csv"
+    archive_path = (
+        Path(args.archive).expanduser()
+        if args.archive
+        else data_dir / "tasks" / "archive" / "log.md"
+    )
+    ledger_path = (
+        Path(args.ledger).expanduser() if args.ledger else data_dir / "data" / "task_log.csv"
+    )
     if not archive_path.is_absolute():
         archive_path = Path.cwd() / archive_path
     if not ledger_path.is_absolute():

@@ -22,11 +22,21 @@ goals/projects.md
 context/weekly-focus.md
 context/planner-memory.md
 context/daily-outcomes.md
+context/planning-insights.md
+context/weekly-outcomes.md
 tasks/today.md
 tasks/backlog.md
 tasks/archive/log.md
 data/task_log.csv
 ```
+
+Optional local-only GitHub sync config:
+
+```text
+config/github_sync.example.json
+```
+
+Copy it to `config/github_sync.json` inside your private data root and edit the private GitHub issue repo or Project v2 target there. The real `github_sync.json` file should stay local-only.
 
 Validation command from the repo root:
 

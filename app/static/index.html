@@ -4,20 +4,32 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Personal PM</title>
-  <link rel="stylesheet" href="/static/style.css?v=1.0.0">
+  <link rel="stylesheet" href="/static/style.css?v=1.6.0">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <div class="app-shell">
     <nav class="tab-bar">
       <button class="tab active" data-tab="today" onclick="switchTab('today')">Today</button>
+      <button class="tab" data-tab="projects" onclick="switchTab('projects')">Projects</button>
+      <button class="tab" data-tab="weekly" onclick="switchTab('weekly')">Weekly Focus</button>
       <button class="tab" data-tab="analytics" onclick="switchTab('analytics')">Analytics</button>
       <button class="tab" data-tab="docs" onclick="switchTab('docs')">Docs</button>
-      <button class="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode" id="theme-btn"></button>
+      <button class="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode" aria-label="Toggle light/dark mode" id="theme-btn"></button>
     </nav>
     <div class="tab-content" id="tab-today">
       <div class="app" id="app">
         <div class="loading">Loading today's plan...</div>
+      </div>
+    </div>
+    <div class="tab-content hidden" id="tab-projects">
+      <div class="app" id="projects">
+        <div class="loading">Loading projects...</div>
+      </div>
+    </div>
+    <div class="tab-content hidden" id="tab-weekly">
+      <div class="app" id="weekly-focus">
+        <div class="loading">Loading weekly focus...</div>
       </div>
     </div>
     <div class="tab-content hidden" id="tab-analytics">
@@ -31,6 +43,7 @@
       </div>
     </div>
   </div>
-  <script src="/static/app.js?v=1.0.0"></script>
+  <div class="toast-container" id="toast-container" role="status" aria-live="polite" aria-atomic="false"></div>
+  <script src="/static/app.js?v=1.6.0"></script>
 </body>
 </html>

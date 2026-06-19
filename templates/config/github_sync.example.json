@@ -1,0 +1,8 @@
+{
+  "repo": "OWNER/PRIVATE_REPO",
+  "project_owner": "OWNER",
+  "project_owner_type": "user",
+  "project_number": 1,
+  "tasks": "durable",
+  "projects": "all"
+}
