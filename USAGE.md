@@ -245,15 +245,17 @@ If port `5151` is busy, rerun the command with another local port.
 
 ## Guided Weekly Setup
 
-The app helps you set a weekly focus on first launch. When the Today view loads and there is no weekly focus for the current week (or `goals/goal.md` has no overall goals), it shows a short guided setup that drafts the weekly focus with an agent CLI.
+The app helps you manage goals and set a weekly focus on first launch. When the Today view loads and there is no weekly focus for the current week (or `goals/goal.md` has no overall goals), it shows a two-stage guided setup.
 
 How it works:
 
-1. Pick a runner — Codex, Claude Code, or Gemini CLI (the same runners as "Run Today's Flow"; Codex is the default).
-2. The app asks that CLI for 3-5 questions tailored to your goals and active projects.
-3. You answer them once.
-4. The app asks the CLI to synthesize a weekly focus (and overall goals only when none exist), then writes it to `context/weekly-focus.md` (and `goals/goal.md` when needed).
-5. You land on the Today view; edit the result anytime on the Weekly tab.
+1. Review, add, edit, or remove overall goals. The server saves them to `goals/goal.md` while preserving the file's deadline and discipline sections.
+2. The app frames the decision as "What do you want to work on this week?" and provides guidance to choose 2-4 outcomes, account for commitments and capacity, name blockers and trade-offs, and define what done looks like.
+3. Pick a runner — Codex, Claude Code, or Gemini CLI (the same runners as "Run Today's Flow"; Codex is the default).
+4. The app asks that CLI for 6-8 questions grounded in the saved goals and active projects. Every question includes answer guidance and a concrete example.
+5. Answer at least four questions.
+6. The app asks the CLI to synthesize only the weekly focus, then writes it to `context/weekly-focus.md`. The assistant does not rewrite goals.
+7. You land on the Today view; edit the result anytime on the Weekly tab.
 
 The CLI receives your current goal/project/week context and your answers. It is run read-only and asked to return JSON only, so it never edits files directly; the server validates the JSON before writing.
 
@@ -263,14 +265,15 @@ Configuration:
 - `PERSONAL_PM_ONBOARDING_MODEL` selects a specific model for this step (applied as the runner's model flag).
 - Skip it for the session, or choose "set it up manually" to use the Weekly tab form instead.
 
-Endpoints (both `POST`, JSON body, default `provider` is `codex`):
+Endpoints (`POST`, JSON body, default `provider` is `codex`):
 
 ```text
-/api/onboarding/questions   { "provider": "codex|claude|gemini", "need_goals": false }
-/api/onboarding/generate    { "provider": "...", "need_goals": false, "answers": [ { "label": "...", "answer": "..." } ] }
+/api/onboarding/goals       { "goals": ["...", "..."] }
+/api/onboarding/questions   { "provider": "codex|claude|gemini" }
+/api/onboarding/generate    { "provider": "...", "answers": [ { "label": "...", "answer": "..." } ] }
 ```
 
-`questions` returns `{ ok, provider, questions: [...] }`. `generate` validates and persists, then returns `{ ok, provider, weekly, goals }`. An unsupported provider returns `400`; a CLI/parse/timeout failure returns `502` with a readable `error`.
+`goals` returns `{ ok, goals }`. `questions` returns `{ ok, provider, questions: [...] }`. `generate` requires four non-empty answers, validates and persists the focus, then returns `{ ok, provider, weekly, goals }`. Weekly endpoints return `409` until at least one goal has been saved. An unsupported provider returns `400`; a CLI/parse/timeout failure returns `502` with a readable `error`.
 
 ## Run The Demo
 

@@ -98,9 +98,10 @@ If port `5151` is busy, choose another local port.
 
 ## First-Run Weekly Setup
 
-When you open the app and there is no weekly focus for the current week (or no overall goals yet), the Today tab shows a short guided setup. Pick a runner (Codex, Claude Code, or Gemini CLI — the same runners as "Run Today's Flow"), answer 3-5 questions tailored to your goals and projects, and it drafts a weekly focus you can edit on the Weekly tab.
+When you open the app and there is no weekly focus for the current week (or no overall goals yet), the Today tab shows a two-stage guided setup. First, review, add, edit, or remove your overall goals. After those user-managed goals are saved, the app asks, "What do you want to work on this week?" It provides guidance on outcomes, capacity, blockers, trade-offs, and a definition of done; then you pick a runner (Codex, Claude Code, or Gemini CLI — the same runners as "Run Today's Flow"), answer at least four of 6-8 tailored questions, and receive an editable weekly focus.
 
-- The selected agent CLI receives your current goal/project/week context and your answers; it runs read-only and only returns JSON, so it never edits files directly.
+- Goal changes are written through the local parser before the assistant starts; the assistant uses those goals as context but never rewrites them.
+- The selected agent CLI receives your current goal/project/week context and your weekly answers; it runs read-only and only returns JSON, so it never edits files directly.
 - Requires that runner's CLI on your `PATH`, or set `PERSONAL_PM_CODEX_BIN` / `PERSONAL_PM_CLAUDE_BIN` / `PERSONAL_PM_GEMINI_BIN`. Defaults to Codex.
 - Set `PERSONAL_PM_ONBOARDING_MODEL` to pick a specific model for this step.
 - You can skip it for the session, or choose "set it up manually" to use the Weekly tab form.

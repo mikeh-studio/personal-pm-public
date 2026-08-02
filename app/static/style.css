@@ -2419,10 +2419,94 @@ a.doc-title:hover {
   padding: 28px 0 12px;
 }
 
+.onb-guidance {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-hover);
+}
+
+.onb-guidance-title {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.onb-guidance ul {
+  margin: 7px 0 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.onb-guidance li + li {
+  margin-top: 3px;
+}
+
 .onb-fields {
   display: grid;
   gap: 14px;
   margin: 18px 0 4px;
+}
+
+.onb-goals {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.onb-goal-row {
+  display: grid;
+  gap: 5px;
+}
+
+.onb-goal-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.onb-goal-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+}
+
+.onb-goal-input {
+  min-height: 72px;
+  line-height: 1.35;
+  resize: vertical;
+}
+
+.onb-goal-remove,
+.onb-add-goal {
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.onb-goal-remove {
+  padding: 10px 4px;
+}
+
+.onb-add-goal {
+  margin-top: 10px;
+  padding: 4px 0;
+  color: var(--lime-dark);
+  font-weight: 700;
+}
+
+.onb-goal-remove:hover,
+.onb-add-goal:hover {
+  color: var(--text);
 }
 
 .onb-field {
@@ -2506,5 +2590,12 @@ a.doc-title:hover {
   }
   .onb-actions .form-btn {
     width: 100%;
+  }
+  .onb-goal-control {
+    grid-template-columns: 1fr;
+  }
+  .onb-goal-remove {
+    justify-self: end;
+    padding: 0 2px 4px;
   }
 }

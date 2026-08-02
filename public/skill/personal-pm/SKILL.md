@@ -186,7 +186,8 @@ Reference shapes:
 
 ## Weekly Focus Setup (App)
 - Separate from this planner skill, the local app offers a first-run guided setup when `DATA_DIR/context/weekly-focus.md` has no entry for the current week (or `goals/goal.md` has no overall goals).
-- It sends the selected CLI the current goal/project/week context and setup answers, runs that CLI read-only to draft questions and synthesize the weekly focus, then writes `context/weekly-focus.md` (and `goals/goal.md` only when goals are missing).
+- The user must first review and save at least one overall goal. Goal edits are written through the local parser before any assistant call, preserving the other goal-file sections.
+- It then frames the decision as "What do you want to work on this week?", provides outcome/capacity/trade-off guidance, sends the selected CLI the saved goal/project/week context, asks for 6-8 guided weekly questions, requires at least four answers, and runs that CLI read-only to synthesize only the weekly focus. The assistant never rewrites the user's goals.
 - This skill still reads the weekly focus as a normal planning input; it does not invoke that setup itself.
 
 ## References

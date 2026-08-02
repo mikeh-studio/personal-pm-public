@@ -170,23 +170,25 @@ function needsOnboarding() {
   const weekOf = defaultWeekOf();
   const weeks = (state.weekly && state.weekly.weeks) || [];
   const hasWeekly = weeks.some((w) => w.week_of === weekOf);
-  return { need: !hasWeekly || !hasGoals, weekOf, needGoals: !hasGoals };
+  return { need: !hasWeekly || !hasGoals, weekOf, needWeekly: !hasWeekly };
 }
 
 function maybeStartOnboarding() {
   if (_onboardingDismissed || viewingArchive) return;
   if (document.querySelector(".onboarding-overlay")) return;
-  const { need, weekOf, needGoals } = needsOnboarding();
+  const { need, weekOf, needWeekly } = needsOnboarding();
   if (!need) return;
-  openOnboarding(weekOf, needGoals);
+  openOnboarding(weekOf, needWeekly);
 }
 
-function openOnboarding(weekOf, needGoals) {
+function openOnboarding(weekOf, needWeekly = true) {
+  const currentGoals = ((state.goals && state.goals.overall_goals) || []).slice();
   _onboardingState = {
-    step: "intro",
+    step: "goals",
     weekOf,
-    needGoals,
+    needWeekly,
     provider: "codex",
+    goalDraft: currentGoals.length ? currentGoals : [""],
     questions: [],
     answers: {},
     error: "",
@@ -217,13 +219,80 @@ function onboardingManualSetup() {
   openWeeklyAddForm();
 }
 
+function _captureOnboardingGoals() {
+  if (!_onboardingState) return;
+  _onboardingState.goalDraft = (_onboardingState.goalDraft || []).map((goal, i) => {
+    const el = $(`#onb-goal-${i}`);
+    return el ? el.value : goal;
+  });
+}
+
+function addOnboardingGoal() {
+  if (!_onboardingState) return;
+  _captureOnboardingGoals();
+  if (_onboardingState.goalDraft.length >= 12) {
+    _onboardingState.error = "Keep the goal list to 12 items or fewer.";
+    renderOnboarding();
+    return;
+  }
+  _onboardingState.goalDraft.push("");
+  _onboardingState.error = "";
+  renderOnboarding();
+  const fields = document.querySelectorAll(".onb-goal-input");
+  if (fields.length) fields[fields.length - 1].focus();
+}
+
+function removeOnboardingGoal(index) {
+  if (!_onboardingState) return;
+  _captureOnboardingGoals();
+  _onboardingState.goalDraft.splice(index, 1);
+  if (!_onboardingState.goalDraft.length) _onboardingState.goalDraft.push("");
+  renderOnboarding();
+}
+
+function saveOnboardingGoals() {
+  if (!_onboardingState) return;
+  _captureOnboardingGoals();
+  const goals = (_onboardingState.goalDraft || []).map((goal) => goal.trim()).filter(Boolean);
+  if (!goals.length) {
+    _onboardingState.error = "Add at least one goal before continuing.";
+    renderOnboarding();
+    return;
+  }
+
+  _onboardingState.step = "saving-goals";
+  _onboardingState.error = "";
+  renderOnboarding();
+
+  _onboardingFetch("/api/onboarding/goals", { goals })
+    .then(async (data) => {
+      if (!_onboardingState) return;
+      state.goals = data.goals;
+      _onboardingState.goalDraft = (data.goals.overall_goals || []).slice();
+      if (!_onboardingState.needWeekly) {
+        _onboardingDismissed = true;
+        closeOnboarding(true);
+        toast("Goals updated", "success");
+        await fetchAll();
+        return;
+      }
+      _onboardingState.step = "intro";
+      renderOnboarding();
+    })
+    .catch((err) => {
+      if (!_onboardingState) return;
+      _onboardingState.step = "goals";
+      _onboardingState.error = err.message || "Could not save goals.";
+      renderOnboarding();
+    });
+}
+
 function startOnboardingQuestions() {
   if (!_onboardingState) return;
   _onboardingState.step = "loading";
   _onboardingState.error = "";
   renderOnboarding();
   _onboardingFetch("/api/onboarding/questions", {
-    need_goals: _onboardingState.needGoals,
     provider: _onboardingState.provider,
   })
     .then((data) => {
@@ -260,8 +329,8 @@ function submitOnboarding() {
     .map((q) => ({ id: q.id, label: q.label, answer: (_onboardingState.answers[q.id] || "").trim() }))
     .filter((a) => a.answer);
 
-  if (answers.length < Math.min(2, qs.length)) {
-    _onboardingState.error = "Answer at least a couple of questions so the draft is useful.";
+  if (answers.length < 4) {
+    _onboardingState.error = "Answer at least four questions so the weekly focus is grounded.";
     renderOnboarding();
     return;
   }
@@ -271,7 +340,6 @@ function submitOnboarding() {
   renderOnboarding();
 
   _onboardingFetch("/api/onboarding/generate", {
-    need_goals: _onboardingState.needGoals,
     provider: _onboardingState.provider,
     answers,
   })
@@ -304,24 +372,70 @@ function _onboardingProviderField() {
     </label>`;
 }
 
+function _onboardingGuidance() {
+  return `
+    <div class="onb-guidance">
+      <div class="onb-guidance-title">Guidance</div>
+      <ul>
+        <li>Choose 2-4 outcomes that move a saved goal or active project.</li>
+        <li>Include fixed commitments and be realistic about your time and energy.</li>
+        <li>Name likely blockers and what you are willing to defer.</li>
+        <li>Describe what “done” should look like by the end of the week.</li>
+      </ul>
+    </div>`;
+}
+
 function _onboardingBody() {
   const s = _onboardingState;
   const week = shortDate(s.weekOf);
   const errorHtml = s.error ? `<div class="form-error">${esc(s.error)}</div>` : "";
 
-  if (s.step === "loading" || s.step === "generating") {
-    const msg = s.step === "loading" ? "Thinking of a few good questions…" : "Drafting your weekly focus…";
+  if (s.step === "saving-goals" || s.step === "loading" || s.step === "generating") {
+    const msg =
+      s.step === "saving-goals"
+        ? "Saving your goals…"
+        : s.step === "loading"
+          ? "Preparing focused questions…"
+          : "Drafting your weekly focus…";
     return `
-      <div class="onb-kicker">Weekly setup</div>
+      <div class="onb-kicker">Weekly setup · ${s.step === "saving-goals" ? "Step 1 of 2" : "Step 2 of 2"}</div>
       <h2 class="onb-title">Week of ${esc(week)}</h2>
       <div class="onb-loading"><span class="spinner"></span><span>${esc(msg)}</span></div>`;
   }
 
+  if (s.step === "goals") {
+    return `
+      <div class="onb-kicker">Weekly setup · Step 1 of 2</div>
+      <h2 class="onb-title">Review your goals before choosing this week’s work</h2>
+      <p class="onb-lead">These goals are your guardrails. Add, edit, or remove them now; other sections in your local goal file stay unchanged.</p>
+      ${errorHtml}
+      <div class="onb-goals">
+        ${(s.goalDraft || [])
+          .map(
+            (goal, i) => `
+          <div class="onb-goal-row">
+            <label class="onb-goal-label" for="onb-goal-${i}">Goal ${i + 1}</label>
+            <div class="onb-goal-control">
+              <textarea class="task-form-input onb-goal-input" id="onb-goal-${i}" rows="3" placeholder="What longer-term outcome are you working toward?">${esc(goal)}</textarea>
+              <button type="button" class="onb-goal-remove" onclick="removeOnboardingGoal(${i})" aria-label="Remove goal ${i + 1}">Remove</button>
+            </div>
+          </div>`
+          )
+          .join("")}
+      </div>
+      <button type="button" class="onb-add-goal" onclick="addOnboardingGoal()">+ Add another goal</button>
+      <div class="onb-actions">
+        <button type="button" class="form-btn form-btn-secondary" onclick="dismissOnboarding()">Skip for now</button>
+        <button type="button" class="form-btn form-btn-primary" onclick="saveOnboardingGoals()">Save goals and continue</button>
+      </div>`;
+  }
+
   if (s.step === "questions") {
     return `
-      <div class="onb-kicker">Weekly setup</div>
-      <h2 class="onb-title">A few questions for the week of ${esc(week)}</h2>
-      <p class="onb-lead">Your answers are turned into a concrete weekly focus you can edit anytime.</p>
+      <div class="onb-kicker">Weekly setup · Step 2 of 2</div>
+      <h2 class="onb-title">What do you want to work on this week?</h2>
+      <p class="onb-lead">Answer at least four focused questions for the week of ${esc(week)}. Short, specific answers are better than a complete task dump.</p>
+      ${_onboardingGuidance()}
       ${errorHtml}
       <div class="onb-fields">
         ${(s.questions || [])
@@ -335,7 +449,6 @@ function _onboardingBody() {
           )
           .join("")}
       </div>
-      ${_onboardingProviderField()}
       <div class="onb-actions">
         <button type="button" class="form-btn form-btn-secondary" onclick="dismissOnboarding()">Skip for now</button>
         <button type="button" class="form-btn form-btn-primary" onclick="submitOnboarding()">Generate weekly focus</button>
@@ -345,7 +458,7 @@ function _onboardingBody() {
 
   if (s.step === "error") {
     return `
-      <div class="onb-kicker">Weekly setup</div>
+      <div class="onb-kicker">Weekly setup · Step 2 of 2</div>
       <h2 class="onb-title">Couldn't reach the assistant</h2>
       ${errorHtml}
       <div class="onb-actions">
@@ -356,17 +469,14 @@ function _onboardingBody() {
   }
 
   // intro
-  const lead = s.needGoals
-    ? `You don't have goals or a focus for this week yet. Answer a few quick questions and I'll draft both.`
-    : `There's no focus set for the week of ${esc(week)} yet. Answer a few quick questions and I'll draft one.`;
   return `
-    <div class="onb-kicker">Weekly setup</div>
-    <h2 class="onb-title">Let's set your focus for the week of ${esc(week)}</h2>
-    <p class="onb-lead">${lead}</p>
+    <div class="onb-kicker">Weekly setup · Step 2 of 2</div>
+    <h2 class="onb-title">Choose how to shape this week’s focus</h2>
+    <p class="onb-lead">Your goals are saved. Choose the runner that will prepare 6-8 focused questions for the week of ${esc(week)}.</p>
     ${_onboardingProviderField()}
     <div class="onb-actions">
       <button type="button" class="form-btn form-btn-secondary" onclick="dismissOnboarding()">Skip for now</button>
-      <button type="button" class="form-btn form-btn-primary" onclick="startOnboardingQuestions()">Start</button>
+      <button type="button" class="form-btn form-btn-primary" onclick="startOnboardingQuestions()">Choose this week’s work</button>
     </div>`;
 }
 

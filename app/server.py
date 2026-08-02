@@ -31,6 +31,7 @@ from parser import (
     parse_today,
     parse_weekly_focus,
     project_daily_flow_partition,
+    set_overall_goals,
     toggle_task,
     update_feedback,
 )
@@ -733,17 +734,38 @@ def _onboarding_provider(body):
     return onboarding.normalize_provider(body.get("provider", onboarding.DEFAULT_PROVIDER))
 
 
+def _onboarding_goals_ready():
+    goals = parse_goals() or {}
+    return bool(goals.get("overall_goals"))
+
+
+@app.route("/api/onboarding/goals", methods=["POST"])
+def api_onboarding_goals():
+    body = request.get_json(silent=True) or {}
+    goals = body.get("goals", [])
+    if not isinstance(goals, list):
+        return jsonify({"ok": False, "error": "Goals must be a list."}), 400
+    non_empty_goals = [goal for goal in goals if str(goal or "").strip()]
+    if len(non_empty_goals) > 12:
+        return jsonify({"ok": False, "error": "Keep the goal list to 12 items or fewer."}), 400
+    ok, error = set_overall_goals(non_empty_goals)
+    if not ok:
+        return jsonify({"ok": False, "error": error or "Could not save goals."}), 400
+    return jsonify({"ok": True, "goals": parse_goals()})
+
+
 @app.route("/api/onboarding/questions", methods=["POST"])
 def api_onboarding_questions():
     body = request.get_json(silent=True) or {}
     week_of = current_week_of()
-    need_goals = bool(body.get("need_goals", False))
+    if not _onboarding_goals_ready():
+        return jsonify({"ok": False, "error": "Review and save at least one goal first."}), 409
     try:
         provider = _onboarding_provider(body)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     try:
-        questions = onboarding.generate_questions(week_of, need_goals=need_goals, provider=provider)
+        questions = onboarding.generate_questions(week_of, provider=provider)
     except (FileNotFoundError, TimeoutError, ValueError, RuntimeError) as e:
         return jsonify({"ok": False, "error": str(e)}), 502
     return jsonify({"ok": True, "week_of": week_of, "provider": provider, "questions": questions})
@@ -753,18 +775,22 @@ def api_onboarding_questions():
 def api_onboarding_generate():
     body = request.get_json(silent=True) or {}
     week_of = current_week_of()
-    need_goals = bool(body.get("need_goals", False))
+    if not _onboarding_goals_ready():
+        return jsonify({"ok": False, "error": "Review and save at least one goal first."}), 409
     answers = body.get("answers", [])
     if not isinstance(answers, list) or not answers:
         return jsonify({"ok": False, "error": "Answers are required."}), 400
+    answered = [
+        item for item in answers if isinstance(item, dict) and str(item.get("answer", "")).strip()
+    ]
+    if len(answered) < 4:
+        return jsonify({"ok": False, "error": "Answer at least four weekly setup questions."}), 400
     try:
         provider = _onboarding_provider(body)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     try:
-        result = onboarding.generate_focus(
-            week_of, answers, need_goals=need_goals, provider=provider
-        )
+        result = onboarding.generate_focus(week_of, answered, provider=provider)
     except (FileNotFoundError, TimeoutError, ValueError, RuntimeError) as e:
         return jsonify({"ok": False, "error": str(e)}), 502
     return jsonify({"ok": True, "week_of": week_of, "provider": provider, **result})

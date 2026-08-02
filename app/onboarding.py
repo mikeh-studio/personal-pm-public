@@ -1,5 +1,5 @@
 """First-run onboarding: use a local agent CLI to draft weekly-focus questions and
-synthesize a weekly focus (and overall goals when missing) from the user's answers.
+synthesize a weekly focus from the user's answers after goals are managed explicitly.
 
 The same runners as "Run Today's Flow" are supported (Codex, Claude Code, Gemini CLI).
 Each CLI is run read-only and asked to return only JSON — it never edits files. The
@@ -17,7 +17,6 @@ from parser import (
     parse_goals,
     parse_projects,
     parse_weekly_focus,
-    set_overall_goals,
 )
 from paths import REPO_ROOT
 
@@ -289,15 +288,17 @@ def _clean_questions(raw):
         label = str(q.get("label", "")).strip()
         if not label:
             continue
+        help_text = str(q.get("help", "")).strip()[:300]
+        placeholder = str(q.get("placeholder", "")).strip()[:200]
         cleaned.append(
             {
                 "id": (str(q.get("id") or "").strip() or f"q{idx + 1}"),
                 "label": label[:300],
-                "help": str(q.get("help", "")).strip()[:300],
-                "placeholder": str(q.get("placeholder", "")).strip()[:200],
+                "help": help_text or "Answer with a concrete outcome, constraint, or decision.",
+                "placeholder": placeholder or "What will be true by the end of the week?",
             }
         )
-        if len(cleaned) >= 5:
+        if len(cleaned) >= 8:
             break
     return cleaned
 
@@ -308,31 +309,32 @@ _QUESTIONS_SHAPE = (
 )
 
 
-def generate_questions(week_of, need_goals=False, provider=DEFAULT_PROVIDER):
+def generate_questions(week_of, provider=DEFAULT_PROVIDER):
     context = build_planner_context()
-    goal_clause = (
-        "The user has not set overall goals yet, so include 1-2 questions about their "
-        "longer-term direction in addition to this week.\n"
-        if need_goals
-        else "Overall goals are already set; focus the questions on THIS week only.\n"
-    )
     prompt = (
-        "You are a focused personal planning coach helping the user set their weekly "
-        f"focus for the week of {week_of}.\n\n"
+        "You are a focused personal planning coach helping the user answer: 'What do you "
+        f"want to work on this week?' for the week of {week_of}.\n\n"
         f"Context about the user:\n{context}\n\n"
-        f"{goal_clause}"
-        "Write 3 to 5 short, specific questions whose answers let you draft a strong, "
-        "concrete weekly focus of 2-4 priorities. Prefer questions about fixed "
-        "commitments and deadlines, the single most important outcome this week, time "
-        "and energy available, and likely blockers. Avoid generic or yes/no questions.\n\n"
+        "The user reviewed and saved their overall goals before starting this step. Keep "
+        "every question focused on turning those goals into a realistic plan for THIS "
+        "week; do not ask them to redefine their longer-term goals.\n\n"
+        "Write 6 to 8 short, specific questions whose answers let you draft a strong, "
+        "concrete weekly focus of 2-4 priorities. Cover: fixed commitments and deadlines; "
+        "the single most important goal-linked outcome; which active project should move; "
+        "available time and energy; one discipline or practice to maintain; likely blockers "
+        "or dependencies; explicit trade-offs or work to defer; and what a successful week "
+        "will look like. Combine closely related topics when needed. Avoid generic or yes/no "
+        "questions. Every question must include a one-line help prompt that explains what a "
+        "useful answer contains and a concrete placeholder example; do not leave either "
+        "field empty.\n\n"
         "Return ONLY a JSON object (no prose, no markdown fences) of exactly this shape:\n"
         f"{_QUESTIONS_SHAPE}\n"
-        "Use a snake_case id per question; help and placeholder may be empty strings."
+        "Use a snake_case id per question."
     )
     payload = _run_provider_json(provider, prompt)
     questions = _clean_questions(payload.get("questions"))
-    if not questions:
-        raise ValueError("The assistant did not return any questions.")
+    if len(questions) < 6:
+        raise ValueError("The assistant did not return the required 6 to 8 questions.")
     return questions
 
 
@@ -350,30 +352,22 @@ def _format_answers(answers):
     return "\n\n".join(lines)
 
 
-_FOCUS_SHAPE = (
-    '{"overall_goals":["..."],'
-    '"weekly":{"why":"one sentence","priorities":["...","..."],"notes":"optional"}}'
-)
+_FOCUS_SHAPE = '{"weekly":{"why":"one sentence","priorities":["...","..."],"notes":"optional"}}'
 
 
-def generate_focus(week_of, answers, need_goals=False, provider=DEFAULT_PROVIDER):
+def generate_focus(week_of, answers, provider=DEFAULT_PROVIDER):
     context = build_planner_context()
     qa = _format_answers(answers)
     if not qa:
         raise ValueError("No answers were provided.")
 
-    goal_clause = (
-        "Propose 2-3 concise overall goals (longer-term direction) grounded in the answers "
-        "in 'overall_goals'.\n"
-        if need_goals
-        else "Leave 'overall_goals' as an empty array; only produce the weekly focus.\n"
-    )
     prompt = (
         "You are a personal planning coach. Using the user's context and answers, draft a "
         f"concrete weekly focus for the week of {week_of}.\n\n"
         f"User context:\n{context}\n\n"
         f"User answers:\n{qa}\n\n"
-        f"{goal_clause}"
+        "The user's overall goals were reviewed and saved before these questions. Do not "
+        "rewrite or replace them; use them only to ground this weekly focus.\n"
         "Weekly focus rules: 'why' is one sentence on the theme; 'priorities' is 2 to 4 "
         "specific, outcome-oriented items naming the concrete result and, where natural, the "
         "discipline or project, e.g. 'Ship X - Discipline / Project'; 'notes' is an optional "
@@ -390,11 +384,6 @@ def generate_focus(week_of, answers, need_goals=False, provider=DEFAULT_PROVIDER
     notes = str(weekly.get("notes", "")).strip()
     if not priorities:
         raise ValueError("The assistant did not return any weekly priorities.")
-
-    if need_goals:
-        overall = payload.get("overall_goals") or []
-        ok, _ = set_overall_goals(overall)
-        # If goals could not be set we still proceed; the weekly focus is the priority.
 
     ensure_weekly_focus_file()
     ok, error = add_weekly_focus(week_of, why=why, priorities=priorities, notes=notes)
