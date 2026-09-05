@@ -30,7 +30,6 @@ from parser import (
     parse_recent_drive_docs,
     parse_today,
     parse_weekly_focus,
-    project_daily_flow_partition,
     set_overall_goals,
     toggle_task,
     update_feedback,
@@ -48,6 +47,12 @@ from token_usage import (
 )
 
 app = Flask(__name__, static_folder="static")
+
+import api_connections  # noqa: E402
+import security  # noqa: E402
+
+security.install(app)
+api_connections.install(app)
 
 RUN_PROVIDERS = {
     "codex": {
@@ -134,69 +139,14 @@ def _run_selection(body: dict) -> dict:
 
 
 def _run_prompt(provider_label: str, selection: dict) -> str:
-    root = data_dir()
-    selected_label = selection["label"]
-    project_partition = project_daily_flow_partition()
-    eligible_project_names = [p["name"] for p in project_partition["eligible"]]
-    paused_project_names = [p["name"] for p in project_partition["paused"]]
-    closed_project_names = [p["name"] for p in project_partition["closed"]]
-    eligible_projects = ", ".join(eligible_project_names) or "none"
-    paused_projects = ", ".join(paused_project_names) or "none"
-    closed_projects = ", ".join(closed_project_names) or "none"
-    if selection["mode"] == "normal":
-        focus_rule = (
-            '- Treat "Normal planning" as explicit launcher-provided input; do not ask '
-            "the daily-start mode/focus questions."
-        )
-    else:
-        focus_rule = (
-            f'- Treat "{selected_label}" as explicit launcher-provided input; do not ask '
-            "the daily-start mode/focus questions.\n"
-            f"- Bias today toward the selected focus area: {selection['focus']}."
-        )
-
-    rules = "\n".join(
-        [
-            focus_rule,
-            "- Resolve planner files relative to the configured data root, not "
-            "hard-coded private/ paths.",
-            "- Keep public code/package files separate from planner data.",
-            "- Treat `goals/projects.md` rows with `Status` = `Paused` or `Closed` as "
-            "ineligible for daily-flow generation unless the selected focus explicitly "
-            "names that project. Do not create, carry forward, or justify daily tasks "
-            "from paused or closed projects by default.",
-            "- Paused and closed projects are also ineligible when selecting recent-doc "
-            "tasks; a document matched only to paused or closed projects is not a "
-            "project-work reason for today's plan.",
-            "- Keep the workflow local-only. Do not call Google Drive, Google Docs, "
-            "Google Sheets, or external mirror sync helpers.",
-            "- Do not update research or reading-list files unless the user explicitly "
-            "requested research work.",
-            "- If the current plan belongs to a prior date, perform the normal rollover "
-            "into the configured data root before writing the new day.",
-            "- Add compact `| type:... | goal:... | sub:...` metadata to every task line.",
-            "- For carried-forward tasks from prior runs, archive entries, or backlog "
-            "items, add `| backlog:Nd` to show how many calendar days the task has "
-            "remained available and unresolved.",
-            "- If a carried-forward `P1` or `P2` task has missed multiple runs and is "
-            "still broad, rewrite it as a smaller actionable next step instead of "
-            "repeating the broad block.",
-            "- If the current plan is already current and satisfies the workflow, "
-            "prefer verify-only over a cosmetic rewrite.",
-            "- Keep the final response concise and operational.",
-        ]
-    )
-
     return (
-        "Read public/skill/personal-pm/SKILL.md and AGENTS.md, then run today's "
-        "personal-pm workflow using the selected launcher mode.\n\n"
+        "Read public/skill/personal-pm/SKILL.md and AGENTS.md, then follow the daily "
+        "planning workflow linked by that skill.\n\n"
         f"Runner: {provider_label}\n"
-        f"Data root: {root}\n"
-        f"Selected mode: {selection['prompt_mode']}\n"
-        f"Daily-flow eligible projects: {eligible_projects}\n"
-        f"Paused projects excluded unless explicitly selected: {paused_projects}\n"
-        f"Closed projects excluded from daily flow: {closed_projects}\n\n"
-        f"Rules:\n{rules}\n"
+        f"Data root: {data_dir()}\n"
+        f"Explicit user selection: {selection['prompt_mode']}\n"
+        "The user supplied this selection in the UI; use it as the daily-start input. "
+        "Use the skill's shared helpers for rollover and validation."
     )
 
 

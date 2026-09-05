@@ -4,7 +4,9 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 APP_ROOT = REPO_ROOT / "app"
@@ -18,8 +20,18 @@ sys.modules["pm_parser_analytics"] = pm_parser
 SPEC.loader.exec_module(pm_parser)
 
 
+class FixtureDateTime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return cls(2026, 6, 4, 12, tzinfo=tz)
+
+
 class AnalyticsTests(unittest.TestCase):
     def setUp(self):
+        # Keep the 90-day window anchored to the dated fixtures as time passes.
+        clock = patch("pm_core.store.datetime", FixtureDateTime)
+        clock.start()
+        self.addCleanup(clock.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.previous_data_dir = os.environ.get("PERSONAL_PM_DATA_DIR")

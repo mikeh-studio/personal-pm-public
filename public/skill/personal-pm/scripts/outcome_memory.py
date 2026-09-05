@@ -33,6 +33,13 @@ class ArchiveTask:
     def active(self) -> bool:
         return self.status in {"completed", "incomplete"}
 
+    @property
+    def reported_outcome(self) -> str:
+        if self.status != "incomplete":
+            return self.status
+        value = self.metadata.get("outcome", "").strip().lower()
+        return value if value in {"incomplete", "blocked"} else "unknown"
+
 
 @dataclass
 class ArchiveDay:
@@ -47,6 +54,26 @@ class ArchiveDay:
     @property
     def incomplete(self) -> list[ArchiveTask]:
         return [task for task in self.tasks if task.status == "incomplete"]
+
+    @property
+    def unknown(self) -> list[ArchiveTask]:
+        return [task for task in self.tasks if task.reported_outcome == "unknown"]
+
+    @property
+    def confirmed_incomplete(self) -> list[ArchiveTask]:
+        return [task for task in self.tasks if task.reported_outcome in {"incomplete", "blocked"}]
+
+    @property
+    def fully_reported(self) -> bool:
+        return self.active_planned_count > 0 and not self.unknown
+
+    @property
+    def reporting_coverage(self) -> int:
+        if not self.active_planned_count:
+            return 0
+        return round(
+            (self.active_planned_count - len(self.unknown)) / self.active_planned_count * 100
+        )
 
     @property
     def deleted_canceled(self) -> list[ArchiveTask]:
@@ -221,12 +248,15 @@ def parse_archive(text: str) -> list[ArchiveDay]:
 
 def consecutive_zero_completion_days(days: list[ArchiveDay]) -> int:
     count = 0
+    newer = None
     for archived_day in reversed(days):
-        if archived_day.active_planned_count == 0:
-            continue
-        if archived_day.completed:
+        current = date.fromisoformat(archived_day.day)
+        if newer and (newer - current).days > 7:
+            break
+        if not archived_day.fully_reported or archived_day.completed:
             break
         count += 1
+        newer = current
     return count
 
 
@@ -243,7 +273,7 @@ def dimension_stats(days: list[ArchiveDay], key: str):
 
     for archived_day in days:
         for task in archived_day.tasks:
-            if not task.active:
+            if not task.active or task.reported_outcome == "unknown":
                 continue
             value = normalize_bucket(task.metadata.get(key, "unknown"))
             planned[value] += 1
@@ -283,32 +313,63 @@ def friction_rows(rows, limit: int = 4):
     )[:limit]
 
 
-def adaptive_rule(days: list[ArchiveDay]) -> tuple[str, int, int]:
+def recent_reported_zero(days: list[ArchiveDay], as_of: str | None = None) -> bool:
+    today = date.fromisoformat(
+        as_of or os.environ.get("PERSONAL_PM_TODAY_DATE") or date.today().isoformat()
+    )
+    return bool(
+        days
+        and days[-1].fully_reported
+        and not days[-1].completed
+        and 0 <= (today - date.fromisoformat(days[-1].day)).days <= 7
+    )
+
+
+def adaptive_rule(days: list[ArchiveDay], as_of: str | None = None) -> tuple[str, int, int]:
     if not days:
         return (
-            "No archived outcomes yet; use the normal 5-task plan until real completion data exists.",
+            "No archived outcomes yet; fit the plan to stated capacity, using at most 5 tasks. A single P1 can be sufficient.",
             5,
             180,
         )
 
     latest = days[-1]
-    recent = recent_window(days, 7)
+    today = date.fromisoformat(
+        as_of or os.environ.get("PERSONAL_PM_TODAY_DATE") or date.today().isoformat()
+    )
+    if not 0 <= (today - date.fromisoformat(latest.day)).days <= 7:
+        return (
+            "Archived outcomes are outside the recent planning window; refresh priorities and use current capacity.",
+            5,
+            180,
+        )
+    if latest.unknown:
+        return (
+            "Some task outcomes were not reported. Do not infer missed work or difficulty; use current capacity, or propose one small P1 when capacity is unknown.",
+            5,
+            180,
+        )
+    recent = [
+        day
+        for day in recent_window(days, 7)
+        if day.fully_reported and 0 <= (today - date.fromisoformat(day.day)).days <= 14
+    ]
     recent_active = sum(day.active_planned_count for day in recent)
     recent_completed = sum(len(day.completed) for day in recent)
     recent_rate = round(recent_completed / recent_active * 100) if recent_active else 0
     zero_streak = consecutive_zero_completion_days(days)
 
-    if latest.active_planned_count and not latest.completed:
+    if recent_reported_zero(days, as_of):
         if zero_streak >= 2:
             return (
-                "Latest archived day completed 0 active tasks and the zero-completion streak is "
-                f"{zero_streak} days. Document this as difficulty completing large task sets; "
+                "All active outcomes were reported with no completions across "
+                f"{zero_streak} recent archived days. Check blockers and relevance; "
                 "make the next plan at most 3 active tasks, at most 75 planned minutes, and keep P1 at 35 minutes or less.",
                 3,
                 75,
             )
         return (
-            "Latest archived day completed 0 active tasks. Document this as difficulty completing large tasks; "
+            "All active outcomes on the latest archived day were reported with no completions; "
             "reduce the next plan to at most 4 active tasks or 90 planned minutes, with a smaller first artifact.",
             4,
             90,
@@ -316,14 +377,14 @@ def adaptive_rule(days: list[ArchiveDay]) -> tuple[str, int, int]:
 
     if recent_rate < 40 and recent_active:
         return (
-            f"Recent 7-archive completion rate is {recent_rate}%. Keep the next plan at most 4 active tasks "
+            f"Completion rate across {len(recent)} recently reported days is {recent_rate}%. Keep the next plan at most 4 active tasks "
             "or reduce planned minutes by about 25%.",
             4,
             120,
         )
 
     return (
-        f"Recent 7-archive completion rate is {recent_rate}%. A normal 5-task plan is acceptable if P3 tasks remain optional.",
+        "Fit the plan to current capacity; at most 5 tasks, with one small P1 when capacity is unknown.",
         5,
         180,
     )
@@ -380,8 +441,8 @@ def build_planning_insights(days: list[ArchiveDay], recent_days_count: int) -> s
         "<!--",
         "Generated from tasks/archive/log.md by outcome_memory.py.",
         "The archive remains the source of truth; regenerate this file after rollover.",
-        "Treat unchecked tasks as incomplete unless they have status:canceled, status:cancelled, status:deleted,",
-        "or appear in a Deleted / Canceled Tasks archive section.",
+        "Unchecked tasks remain open in history; their outcome is unknown unless explicitly reported.",
+        "Unknown outcomes are excluded from learned patterns and failure-based scope limits.",
         "-->",
         "",
     ]
@@ -394,9 +455,11 @@ def build_planning_insights(days: list[ArchiveDay], recent_days_count: int) -> s
                 f"- Date: {latest.day}",
                 f"- Active planned tasks: {latest.active_planned_count}",
                 f"- Completed tasks: {len(latest.completed)}",
-                f"- Incomplete tasks: {len(latest.incomplete)}",
+                f"- Confirmed incomplete / blocked tasks: {len(latest.confirmed_incomplete)}",
+                f"- Unknown outcomes: {len(latest.unknown)}",
+                f"- Reporting coverage: {latest.reporting_coverage}% of active tasks",
                 f"- Deleted / canceled tasks: {len(latest.deleted_canceled)}",
-                f"- Completion rate: {latest.completion_rate}%",
+                f"- Recorded completions / planned tasks: {latest.completion_rate}% (includes unknown outcomes in denominator)",
                 f"- Planned minutes: {latest.planned_minutes}",
                 f"- Completed minutes: {latest.completed_minutes}",
                 "",
@@ -406,8 +469,10 @@ def build_planning_insights(days: list[ArchiveDay], recent_days_count: int) -> s
         lines.extend(f"- {task}" for task in format_task_titles(latest.completed))
         lines.extend(["", "Deleted / canceled:"])
         lines.extend(f"- {task}" for task in format_task_titles(latest.deleted_canceled))
-        lines.extend(["", "Incomplete:"])
-        lines.extend(f"- {task}" for task in format_task_titles(latest.incomplete))
+        lines.extend(["", "Confirmed incomplete / blocked:"])
+        lines.extend(f"- {task}" for task in format_task_titles(latest.confirmed_incomplete))
+        lines.extend(["", "Outcome unknown:"])
+        lines.extend(f"- {task}" for task in format_task_titles(latest.unknown))
         lines.append("")
     else:
         lines.extend(["## Latest Archived Day", "- No archived outcomes yet.", ""])
@@ -418,23 +483,24 @@ def build_planning_insights(days: list[ArchiveDay], recent_days_count: int) -> s
             f"- Recommendation: {rule_text}",
             f"- Next-plan active task cap: {max_tasks}",
             f"- Next-plan planned-minute cap: {max_minutes}",
-            f"- Current zero-completion streak: {zero_streak}",
+            f"- Consecutive archived days with fully reported outcomes and no completions: {zero_streak}",
             f"- Recent window: last {len(recent)} archived days",
             f"- Recent active planned tasks: {recent_active}",
             f"- Recent completed tasks: {recent_completed}",
             f"- Recent deleted / canceled tasks: {recent_deleted_canceled}",
-            f"- Recent completion rate: {recent_rate}%",
+            f"- Recent recorded completions / planned tasks: {recent_rate}%",
+            f"- Recent unknown outcomes: {sum(len(day.unknown) for day in recent)}",
             "",
             "## Learned Completion Patterns",
-            "Completed more reliably by task type:",
+            "Reported outcomes by task type (unknown outcomes excluded; reporting may be selective):",
         ]
     )
     lines.extend(f"- {row}" for row in format_dimension_rows(best_rows(type_rows)))
-    lines.extend(["", "Higher-friction task types:"])
+    lines.extend(["", "More reported incomplete / blocked tasks by type:"])
     lines.extend(f"- {row}" for row in format_dimension_rows(friction_rows(type_rows)))
-    lines.extend(["", "Completed more reliably by sub-category:"])
+    lines.extend(["", "Reported outcomes by sub-category:"])
     lines.extend(f"- {row}" for row in format_dimension_rows(best_rows(sub_rows)))
-    lines.extend(["", "Higher-friction sub-categories:"])
+    lines.extend(["", "More reported incomplete / blocked tasks by sub-category:"])
     lines.extend(f"- {row}" for row in format_dimension_rows(friction_rows(sub_rows)))
     lines.append("")
 
@@ -454,18 +520,20 @@ def group_by_week(days: list[ArchiveDay]):
 
 
 def build_week_signal(week_days: list[ArchiveDay]) -> str:
+    if any(day.unknown for day in week_days):
+        return "Reporting is incomplete; refresh context before drawing conclusions about execution or next week's capacity."
     active_planned = sum(day.active_planned_count for day in week_days)
     completed = sum(len(day.completed) for day in week_days)
     zero_days = sum(1 for day in week_days if day.active_planned_count and not day.completed)
     rate = round(completed / active_planned * 100) if active_planned else 0
 
     if active_planned and completed == 0:
-        return "No active tasks completed this week; next week should reduce task count or total time and make P1 a smaller first artifact."
+        return "All active outcomes were reported with no completions; review blockers and relevance and propose a smaller first artifact."
     if zero_days >= 2:
         return f"{zero_days} zero-completion days this week; use fewer active tasks and treat P3 work as optional."
     if rate < 40 and active_planned:
-        return f"Completion rate was {rate}%; reduce scope before adding new lanes."
-    return "Completion was enough to keep normal planning, as long as lower-priority tasks stay skippable."
+        return f"Reported completion rate was {rate}%; consider smaller scope and check blockers."
+    return "Use current priorities and capacity; historical completion does not establish today's availability."
 
 
 def build_weekly_outcomes(days: list[ArchiveDay], recent_weeks: int) -> str:
@@ -506,9 +574,11 @@ def build_weekly_outcomes(days: list[ArchiveDay], recent_weeks: int) -> str:
                 f"- Original planned tasks: {original_planned}",
                 f"- Active planned tasks: {active_planned}",
                 f"- Completed tasks: {len(completed)}",
-                f"- Incomplete tasks: {len(incomplete)}",
+                f"- Confirmed incomplete / blocked tasks: {sum(len(day.confirmed_incomplete) for day in week_days)}",
+                f"- Unknown outcomes: {sum(len(day.unknown) for day in week_days)}",
+                f"- Reported active outcomes: {active_planned - sum(len(day.unknown) for day in week_days)}/{active_planned}",
                 f"- Deleted / canceled tasks: {len(deleted_canceled)}",
-                f"- Completion rate: {rate}%",
+                f"- Recorded completions / planned tasks: {rate}% (includes unknown outcomes in denominator)",
                 f"- Planned minutes: {planned_minutes}",
                 f"- Completed minutes: {completed_minutes}",
                 f"- Planning signal: {build_week_signal(week_days)}",
@@ -519,7 +589,9 @@ def build_weekly_outcomes(days: list[ArchiveDay], recent_weeks: int) -> str:
         lines.extend(f"- {task}" for task in format_task_titles(completed))
         lines.extend(["", "Deleted / canceled:"])
         lines.extend(f"- {task}" for task in format_task_titles(deleted_canceled))
-        lines.extend(["", "Incomplete / carried:"])
+        lines.extend(
+            ["", "Open tasks (may include unknown outcomes; review relevance before carrying):"]
+        )
         lines.extend(f"- {task}" for task in format_task_titles(incomplete))
         lines.append("")
 

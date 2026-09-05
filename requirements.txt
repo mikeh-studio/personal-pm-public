@@ -1,3 +1,2 @@
-flask
-pywebview
-ruff
+# The skill and its helpers use Python 3.10+ standard library only.
+# Optional UI: python3 -m pip install -r requirements-ui.txt

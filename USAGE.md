@@ -42,13 +42,9 @@ data/task_log.csv
 
 ## First-Time Setup
 
-1. Install app dependencies:
+Use Python 3.10+; no third-party packages are needed for the skill.
 
-```bash
-python3 -m pip install -r requirements.txt
-```
-
-2. Bootstrap the private workspace if it does not exist yet:
+1. Bootstrap the private workspace if it does not exist yet:
 
 ```bash
 ./setup.sh
@@ -56,15 +52,15 @@ python3 -m pip install -r requirements.txt
 
 The script copies missing files from `templates/` and leaves existing files unchanged.
 
-3. Open `private/goals/goal.md`.
-4. Fill in meaningful content for:
+2. Ask your agent “Set up Personal PM with me”, or open `private/goals/goal.md`.
+3. Fill in meaningful content for:
    - `Overall Goals`
    - `Current Near-Term Deadlines`
    - `Key Disciplines`
    - `Suggested Daily Practice`
-5. Open `private/goals/projects.md`.
-6. Add active projects, their status, and the next action for each.
-7. Run validation:
+4. Open `private/goals/projects.md`.
+5. Add active projects, their status, and the next action for each.
+6. After the first plan is written, run validation:
 
 ```bash
 python3 scripts/validate_workspace.py --read-only
@@ -87,19 +83,64 @@ Run normal planning for today.
 Run the PM flow focused on Decision science.
 ```
 
-Expected Codex flow:
+Expected flow:
 
-1. Read `AGENTS.md` and `public/skill/personal-pm/SKILL.md`.
-2. Check `goals/goal.md` before reading the rest of the planning state.
-3. Ask whether to run normal planning or a specific focus unless your prompt already supplies that choice.
-4. Read the active data root in source-precedence order.
-5. Archive stale `tasks/today.md` only when rollover is needed.
-6. Refresh `context/planning-insights.md` and `context/weekly-outcomes.md` from the archive when rollover happened.
-7. Write or verify `tasks/today.md` using the adaptive task/time cap.
-8. Run validation.
-9. Report what changed and what was verified.
+1. Read the skill and open/reuse the UI as a visual companion, then read local goals, current state, and relevant conversation context.
+2. Check freshness and reconcile work already done, obsolete priorities, and old carry-forward candidates.
+3. Bundle missing mode, current priority, and capacity into one brief exchange. With unknown capacity, propose one small P1.
+4. Record explicitly reported prior outcomes and roll over only when needed.
+5. Save a short validated plan, or verify today's existing plan if it still fits.
+
+A long gap prompts a small context refresh, not mandatory weekly setup. Age alone
+does not make a task urgent or prove it was too large. Weekly focus is not silently
+rewritten during normal daily planning.
+
+## Headless Helpers
+
+The agent supplies planning decisions; helpers validate and write local artifacts
+without Flask or a nested agent CLI. Run from the checkout and set the data root:
+
+```bash
+export PERSONAL_PM_DATA_DIR="$(pwd)/private"
+PM_HELPER=public/skill/personal-pm/scripts/pm.py
+python3 "$PM_HELPER" status
+```
+
+`status` is read-only and reports missing goal context, current plan, project
+eligibility, vocabulary, context freshness, outcome reporting coverage, and adaptive scope. During initial setup it is normal to
+have missing weekly or daily artifacts. Once goals are complete, save the agent's
+weekly JSON and daily Markdown drafts:
+
+```bash
+python3 "$PM_HELPER" save-weekly --week-of YYYY-MM-DD --file /path/to/weekly.json
+python3 "$PM_HELPER" save-plan --file /path/to/today-draft.md
+python3 "$PM_HELPER" complete --task-index 0 --date YYYY-MM-DD
+python3 "$PM_HELPER" report --task-index 1 --outcome blocked --date YYYY-MM-DD
+python3 "$PM_HELPER" feedback --field did_not_work --text 'The first step was too broad.' --date YYYY-MM-DD
+python3 "$PM_HELPER" rollover --date YYYY-MM-DD
+```
+
+Use a Monday for `--week-of`, the inspected plan date for completion/feedback, and
+the new planning date for rollover. Completion uses a zero-based index and is
+idempotent. Repeated rollover does not duplicate archive or ledger entries; it
+refreshes derived memory. It leaves the old daily file in place until a validated
+new plan is saved. Conflicting history is reported without overwriting it.
+
+`save-plan` checks goal context, task shape, configured metadata, known project
+eligibility, and adaptive limits after recent, fully reported days with no completions. Add `--focus` only for
+an explicitly selected paused project. Existing same-day plans and weekly focus
+require `--replace` for an explicit revision; retain completion states and feedback.
+Weekly JSON uses `{ "weekly": { "why": "...", "priorities": ["..."], "notes": "..." } }`.
+
+For custom goals, copy `templates/config/planner.example.json` to
+`DATA_DIR/config/planner.json` and edit the identifiers. See
+[metadata](public/skill/personal-pm/references/metadata.md). Configuration is local;
+historical ledger identifiers are preserved.
 
 ## Run The Local Wrapper
+
+These optional scripts exist only in maintainer workspaces. They are not shipped
+in a public clone; use the skill directly for the public workflow.
 
 The wrapper handles goal preflight, focus selection, and Codex invocation:
 
@@ -128,6 +169,8 @@ PERSONAL_PM_DRY_RUN=1 PERSONAL_PM_FOCUS_OVERRIDE="Decision science" \
 ```
 
 ## Run The Morning Launcher
+
+This optional launcher requires the maintainer-only autonomous runner and UI dependencies.
 
 Use the morning launcher when you want the least manual daily entrypoint:
 
@@ -194,14 +237,14 @@ Rules:
 
 - Use `backlog:Nd` only for unresolved work that stayed available from prior runs.
 - Count calendar days from the earliest reliable unresolved appearance.
-- If a `P1` or `P2` backlog task has missed multiple runs and is still broad, shrink it into a smaller next action.
+- Review old or repeatedly appearing work for relevance: keep, redefine, or leave it out. Narrow broad work after confirming it still matters.
 - Keep the next action concrete: one checklist, one scorecard, one draft, one reviewable slice, or one 30-60 minute artifact.
 
 ## Adaptive Outcome Memory
 
 The planner learns from archived outcomes through:
 
-- `context/planning-insights.md`: latest archived day, zero-completion streak, learned task-type patterns, and the next active-task or planned-minute cap.
+- `context/planning-insights.md`: reported and unknown outcomes, reporting coverage, observed task patterns, and applicable scope guidance.
 - `context/weekly-outcomes.md`: compact weekly summaries that keep long-term history readable.
 
 Regenerate them from the archive:
@@ -215,10 +258,34 @@ Outcome rules:
 
 - Completed tasks are checked tasks under `Final Tasks`.
 - Deleted/canceled tasks must use `status:deleted`, `status:canceled`, `status:cancelled`, or the `Deleted / Canceled Tasks` archive section.
-- Plain unchecked tasks are incomplete/carry-forward, not deleted or canceled.
-- If the latest archived day completed no active tasks, the next plan should reduce either active task count or total planned minutes before adding more lanes.
+- Plain unchecked tasks remain open in history; their actual outcome is unknown.
+- `report --outcome incomplete` or `blocked` records a confirmed unfinished outcome. `unknown` explicitly records uncertainty; `dropped` records intentional cancellation. Partial answers leave other outcomes unknown.
+- Unknown outcomes do not trigger failure-based caps or enter learned outcome comparisons. Fully reported days with no completions can reduce scope only when recent (within seven days).
+- Completion counts describe recorded work. Check reporting coverage before interpreting rates; reporting may be selective.
+
+The [feedback reference](public/skill/personal-pm/references/feedback.md) defines the
+closeout contract. Existing archives remain unchanged; regenerate derived memory
+to apply the new interpretation of unreported outcomes.
 
 ## Run The App
+
+To open the visual companion without running a planner or requiring private adapters:
+
+```bash
+./scripts/pm_morning.sh --ui-only
+```
+
+Add `--no-open` when the host will open the printed URL with its own browser tools.
+The launcher verifies the server's data root before reuse and skips occupied ports.
+
+
+The UI opens by default for interactive skill planning and review when available.
+The skill owns planning; opening the UI does not start another planning run.
+Headless requests and unattended runs skip automatic opening. Install its dependencies first:
+
+```bash
+python3 -m pip install -r requirements-ui.txt
+```
 
 Use private data:
 
@@ -234,30 +301,31 @@ PERSONAL_PM_DATA_DIR=demo PYTHONPATH=app \
   python3 -m flask --app server run --host 127.0.0.1 --port 5151
 ```
 
-The app has four main views:
+The app has five main views:
 
-- `Today`: morning run status, task list, carry-forward, heads-up, and feedback fields.
-- `Projects`: editable project portfolio, next actions, recent-doc evidence, and the daily-pull candidate.
+- `Today`: task rows beside feedback for tomorrow, with expandable planning context and run status. Feedback saves when you leave a field; archived plans are read-only.
+- `Projects`: project rows with next actions, expandable details, and editing.
+- `Weekly`: the latest focus, outcome progress, and expandable previous weeks.
 - `Analytics`: completion trends from archive and ledger data.
-- `Docs`: optional recent-docs cache from `context/recent-drive-docs.json`.
+- `Setting`: [API connections](public/skill/personal-pm/references/api-connections.md) and optional recent documents.
 
 If port `5151` is busy, rerun the command with another local port.
 
 ## Guided Weekly Setup
 
-The app helps you manage goals and set a weekly focus on first launch. When the Today view loads and there is no weekly focus for the current week (or `goals/goal.md` has no overall goals), it shows a two-stage guided setup.
+The app provides an optional interface to the [shared weekly planning contract](public/skill/personal-pm/references/weekly-planning.md). The skill can perform this workflow directly in conversation. The app helps you manage goals and set a weekly focus on first launch. When the Today view loads and there is no weekly focus for the current week (or `goals/goal.md` has no overall goals), it shows a two-stage guided setup.
 
 How it works:
 
 1. Review, add, edit, or remove overall goals. The server saves them to `goals/goal.md` while preserving the file's deadline and discipline sections.
 2. The app frames the decision as "What do you want to work on this week?" and provides guidance to choose 2-4 outcomes, account for commitments and capacity, name blockers and trade-offs, and define what done looks like.
-3. Pick a runner — Codex, Claude Code, or Gemini CLI (the same runners as "Run Today's Flow"; Codex is the default).
-4. The app asks that CLI for 6-8 questions grounded in the saved goals and active projects. Every question includes answer guidance and a concrete example.
+3. Pick a local CLI or a configured API from the same provider menu as "Run Today's Flow". Codex is the default.
+4. The app asks that provider for 6-8 questions grounded in the saved goals and active projects. Every question includes answer guidance and a concrete example.
 5. Answer at least four questions.
-6. The app asks the CLI to synthesize only the weekly focus, then writes it to `context/weekly-focus.md`. The assistant does not rewrite goals.
+6. The app asks the provider to synthesize only the weekly focus, then writes it to `context/weekly-focus.md`. The assistant does not rewrite goals.
 7. You land on the Today view; edit the result anytime on the Weekly tab.
 
-The CLI receives your current goal/project/week context and your answers. It is run read-only and asked to return JSON only, so it never edits files directly; the server validates the JSON before writing.
+The selected provider receives your current goal/project/week context and your answers. API calls use the saved model and server-side credential; CLI calls use the installed runner. The CLI runs read-only, while APIs receive no tools. Both return JSON for validation before writing.
 
 Configuration:
 
@@ -265,7 +333,9 @@ Configuration:
 - `PERSONAL_PM_ONBOARDING_MODEL` selects a specific model for this step (applied as the runner's model flag).
 - Skip it for the session, or choose "set it up manually" to use the Weekly tab form instead.
 
-Endpoints (`POST`, JSON body, default `provider` is `codex`):
+Endpoints (`POST`, JSON body, default `provider` is `codex`; APIs use `api:openai`, `api:xai`, `api:openrouter`, or `api:sakana`):
+
+The browser bootstraps `/api/session`, then sends its session cookie and `X-PM-CSRF` token on mutations. `/api/health` is the read-only launcher probe.
 
 ```text
 /api/onboarding/goals       { "goals": ["...", "..."] }
@@ -378,7 +448,7 @@ PERSONAL_PM_DATA_DIR=private \
   --activity-timezone Asia/Taipei
 ```
 
-The app's `Docs` tab reads only `context/recent-drive-docs.json` from the active data root.
+The app's `Setting → Documents` section reads only `context/recent-drive-docs.json` from the active data root.
 
 When `context/recent-drive-docs.json` has a fresh approved scan with a doc tied to a planner goal, the daily planning flow should include one task that references one selected doc and turns it into a concrete artifact. The planner still stays local-only; it reads the local cache and does not call Google during daily planning.
 
@@ -494,7 +564,7 @@ Validate today's plan:
 python3 public/skill/personal-pm/scripts/validate_today.py --json
 ```
 
-By default, `--task-count` is the maximum valid count and `--min-task-count` defaults to `1`, so adaptive three-task plans can pass after no-completion days. Use `--min-task-count 5 --task-count 5` only when you intentionally want an exact five-task check.
+By default, `--task-count` is the maximum valid count and `--min-task-count` defaults to `1`, so short plans can pass when capacity or reported outcomes warrant them. Use `--min-task-count 5 --task-count 5` only when you intentionally want an exact five-task check.
 
 Validate a fixed-date or demo plan:
 

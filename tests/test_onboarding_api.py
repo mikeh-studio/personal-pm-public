@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -20,6 +21,8 @@ class OnboardingApiTests(unittest.TestCase):
         self.previous_data_dir = os.environ.get("PERSONAL_PM_DATA_DIR")
         os.environ["PERSONAL_PM_DATA_DIR"] = self.tmp.name
         self.client = pm_server.app.test_client()
+        token = self.client.get("/api/session").get_json()["csrf"]
+        self.client.environ_base["HTTP_X_PM_CSRF"] = token
 
     def tearDown(self):
         if self.previous_data_dir is None:
@@ -86,6 +89,56 @@ class OnboardingApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 409)
         self.assertIn("save at least one goal", response.get_json()["error"].lower())
+
+    def test_ui_reads_skill_artifacts_and_feedback_survives_headless_rollover(self):
+        from pm_core import workflow
+        from pm_core.weekly import save_weekly
+
+        root = Path(self.tmp.name)
+        (root / "goals").mkdir()
+        (root / "goals/goal.md").write_text(
+            "## Overall Goals\n* Learn Spanish\n\n## Current Near-Term Deadlines\n"
+            "* No fixed deadlines\n\n## Key Disciplines\n* Speaking\n\n"
+            "## Suggested Daily Practice\n* One recording\n",
+            encoding="utf-8",
+        )
+        today = date.today()
+        week = today - timedelta(days=today.weekday())
+        weekly = {
+            "weekly": {
+                "why": "Small daily practice",
+                "priorities": ["Record a short response"],
+                "notes": "20 minutes",
+            }
+        }
+        save_weekly(week.isoformat(), weekly)
+        self.assertEqual(
+            self.client.get("/api/weekly-focus").get_json()["priorities"],
+            weekly["weekly"]["priorities"],
+        )
+        draft = root / "draft.md"
+        draft.write_text(
+            f"# Today's Plan\n\n## {today.isoformat()} — Daily Plan\n\n### Tasks\n"
+            "- [ ] [P1] [20m] Record a response | type:skill_practice | goal:data_owner | sub:writing\n\n"
+            "### Carry-forward\n\n### Heads-up\n\n### Feedback For Tomorrow\n"
+            "- What worked:\n- What did not work:\n- New goal or constraint:\n",
+            encoding="utf-8",
+        )
+        with patch.dict(os.environ, {"PERSONAL_PM_TODAY_DATE": today.isoformat()}):
+            workflow.save_plan(draft)
+        self.assertEqual(
+            self.client.get("/api/today").get_json()["tasks"][0]["title"], "Record a response"
+        )
+        self.client.post("/api/toggle-task", json={"index": 0})
+        self.client.post(
+            "/api/update-feedback", json={"field": "worked", "value": "Short first step"}
+        )
+        workflow.rollover((today + timedelta(days=1)).isoformat())
+        archived = self.client.get(f"/api/archive/{today.isoformat()}").get_json()
+        self.assertTrue(archived["tasks"][0]["checked"])
+        outcomes = self.client.get("/api/outcomes").get_json()
+        self.assertEqual(outcomes[-1]["completed"], ["Record a response"])
+        self.assertIn("Short first step", (root / "tasks/archive/log.md").read_text())
 
 
 if __name__ == "__main__":

@@ -9,6 +9,20 @@ HOST="${PERSONAL_PM_HOST:-127.0.0.1}"
 DEFAULT_PORT="${PERSONAL_PM_PORT:-5151}"
 APP_STDOUT_LOG="${PERSONAL_PM_APP_STDOUT_LOG:-/tmp/personal-pm-app.log}"
 APP_STDERR_LOG="${PERSONAL_PM_APP_STDERR_LOG:-/tmp/personal-pm-app.err}"
+UI_ONLY=0
+NO_OPEN=0
+for arg in "$@"; do
+  case "$arg" in
+    --ui-only) UI_ONLY=1 ;;
+    --no-open) NO_OPEN=1 ;;
+    --help|-h)
+      echo "Usage: scripts/pm_morning.sh [--ui-only] [--no-open]"
+      echo "--ui-only: start/reuse the visual companion without running the planner."
+      echo "--no-open: print the URL for the host to open."
+      exit 0 ;;
+    *) echo "Unknown option: $arg" >&2; exit 2 ;;
+  esac
+done
 
 if [[ -n "${PERSONAL_PM_PYTHON_BIN:-}" ]]; then
   PYTHON_BIN="$PERSONAL_PM_PYTHON_BIN"
@@ -129,7 +143,7 @@ port_has_personal_pm() {
   local port="$1"
   local payload
 
-  if ! payload="$(curl -fsS "http://$HOST:$port/api/morning-status" 2>/dev/null)"; then
+  if ! payload="$(curl --connect-timeout 1 --max-time 2 -fsS "http://$HOST:$port/api/health" 2>/dev/null)"; then
     return 1
   fi
 
@@ -143,7 +157,7 @@ try:
 except json.JSONDecodeError:
     raise SystemExit(1)
 
-raise SystemExit(0 if payload.get("data_root") == os.environ["EXPECTED_DATA_DIR"] else 1)
+raise SystemExit(0 if payload.get("data_root") == os.environ["EXPECTED_DATA_DIR"] and payload.get("ui_contract_version") == 2 else 1)
 '
 }
 
@@ -211,6 +225,11 @@ open_app() {
   local port="$1"
   local url="http://$HOST:$port"
 
+  if (( NO_OPEN )); then
+    echo "Open $url"
+    return 0
+  fi
+
   if [[ "${PERSONAL_PM_DRY_RUN:-0}" == "1" ]]; then
     echo "Dry run: would open $url"
     return 0
@@ -222,6 +241,18 @@ open_app() {
     echo "Open $url"
   fi
 }
+
+if (( UI_ONLY )); then
+  echo "Personal PM visual companion (planning stays with the host skill)"
+  PORT="$(pick_port)"
+  if [[ "${PERSONAL_PM_DRY_RUN:-0}" == "1" ]]; then
+    echo "Dry run: would start or reuse Personal PM app on port $PORT"
+  else
+    start_app_if_needed "$PORT"
+  fi
+  open_app "$PORT"
+  exit 0
+fi
 
 if [[ ! -x "$RUNNER" ]]; then
   echo "Missing or non-executable autonomous runner: $RUNNER" >&2

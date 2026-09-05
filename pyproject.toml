@@ -5,10 +5,11 @@ description = "Local personal growth coach and daily planning PM workflow."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
-dependencies = [
-  "flask",
-  "pywebview",
-]
+dependencies = []
+
+[project.optional-dependencies]
+ui = ["flask", "pywebview", "keyring"]
+dev = ["ruff"]
 
 [tool.black]
 line-length = 100
