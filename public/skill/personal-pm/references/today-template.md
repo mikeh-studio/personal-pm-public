@@ -1,6 +1,7 @@
-# Today Template
+# Today template
 
-Use this shape for `DATA_DIR/tasks/today.md`:
+Start with one task. Add support tasks only when useful and within stated capacity.
+Keep the existing headings for UI compatibility; empty note sections are fine.
 
 ```md
 # Today's Plan
@@ -8,17 +9,12 @@ Use this shape for `DATA_DIR/tasks/today.md`:
 ## YYYY-MM-DD — Daily Plan
 
 ### Tasks
-- [ ] [P1] [duration] Task — [project/discipline] | type:... | goal:... | sub:...
-- [ ] [P2] [duration] Task — [project/discipline] | type:... | goal:... | sub:...
-- [ ] [P3] [duration] Carried-forward task — [project/discipline] | type:... | goal:... | sub:... | backlog:Nd
-- [ ] [P3] [duration] Task — [project/discipline] | type:... | goal:... | sub:...
-- [ ] [P3] [duration] Task — [project/discipline] | type:... | goal:... | sub:...
+- [ ] [P1] [20m] Review one result; done when one correction is recorded — Project | type:project_work | goal:... | sub:... | project:Exact project name
 
 ### Carry-forward
-- ...
 
 ### Heads-up
-- ...
+- Time available is unconfirmed; the 20-minute task is a proposed starting point.
 
 ### Feedback For Tomorrow
 - What worked:
@@ -26,15 +22,12 @@ Use this shape for `DATA_DIR/tasks/today.md`:
 - New goal or constraint:
 ```
 
-Rules:
-- Write 5 tasks by default unless the user explicitly asks for fewer.
-- Keep one task per project, interview lane, or concrete outcome.
-- Use only eligible, non-paused, non-closed projects for project-work tasks. Do not create or carry forward daily tasks from projects whose `Status` is `Paused` or `Closed` unless the user explicitly selected that paused project.
-- Use the lower `P3` slots for optionality instead of repeating the same lane.
-- Keep metadata controlled and compact: `type`, `goal`, and `sub` should use stable enum-style values.
-- For a task derived from a fresh recent-doc summary, mention the document title in the task text and add optional `doc:<id-or-url>` metadata after the required `type`, `goal`, and `sub` fields.
-- Add `backlog:Nd` only when a task is carried forward from a prior run, archive entry, or backlog item. `N` is the number of calendar days it has remained available and unresolved.
-- If a high-priority carried task has missed multiple runs, rewrite it as a smaller concrete next step before carrying it into the new plan.
-- Allowed `type` values: `interview_prep`, `project_work`, `skill_practice`, `career`, `writing`, `design_exploration`
-- Allowed `goal` values: `data_owner`, `experience_design`
-- Allowed `sub` values: `decision_science`, `data_foundation`, `evaluation_discipline`, `service_platform_eng`, `website`, `writing`, `physical_ai`, `career_assets`
+Each task needs an action, finish condition, and estimated time. Keep visible prose
+to one short sentence; avoid multi-clause instructions and administrative notes.
+The Heads-up example applies only when capacity is unknown. Add at most two short
+notes across Carry-forward and Heads-up; omit empty bullets. A necessary detailed
+rationale can live in a Markdown comment below the plan.
+
+Use [metadata.md](metadata.md) for vocabulary, project identity, carry-forward age,
+and reported outcomes. Historical open tasks need a relevance decision before
+reuse; the daily template does not imply automatic carry-forward or cancellation.

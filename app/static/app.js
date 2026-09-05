@@ -1,3 +1,16 @@
+// Every API request uses a same-origin local session; credentials never enter browser storage.
+let pmSession = null;
+async function apiFetch(url, options = {}) {
+  if (!pmSession) {
+    pmSession = fetch('/api/session', {credentials: 'same-origin', cache: 'no-store'})
+      .then(async r => { if (!r.ok) throw new Error('Restart the app server to load API connections.'); return r.json(); })
+      .catch(error => { pmSession = null; throw error; });
+  }
+  const {csrf} = await pmSession;
+  return fetch(url, {...options, credentials: 'same-origin', cache: 'no-store',
+    headers: {...(options.headers || {}), 'X-PM-CSRF': csrf}});
+}
+
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
 
@@ -25,7 +38,20 @@ const RUN_PROVIDERS = {
   codex: { label: "Codex", meta: "Default" },
   claude: { label: "Claude Code", meta: "Anthropic CLI" },
   gemini: { label: "Gemini CLI", meta: "Google CLI" },
+  "api:openai": { label: "OpenAI API", meta: "API connection" },
+  "api:xai": { label: "Grok / xAI API", meta: "API connection" },
+  "api:openrouter": { label: "OpenRouter API", meta: "API connection" },
+  "api:sakana": { label: "Sakana AI API", meta: "API connection" },
 };
+
+// Decorative local assets; the adjacent provider name remains the accessible label.
+function providerLogo(key) {
+  const assets = {codex: "openai", claude: "claude", gemini: "gemini",
+    "api:openai": "openai", "api:xai": "grok", "api:openrouter": "openrouter", "api:sakana": "sakana"};
+  const name = assets[key];
+  if (!name) return "";
+  return `<img class="provider-logo${name === "sakana" ? " provider-logo-sakana" : ""}" src="/static/providers/${name}.${name === "sakana" ? "png" : "svg"}" width="24" height="24" alt="" aria-hidden="true">`;
+}
 
 const RUN_FOCUS_OPTIONS = [
   "Default",
@@ -142,7 +168,7 @@ let _onboardingState = null;
 async function _onboardingFetch(url, payload) {
   let res;
   try {
-    res = await fetch(url, {
+    res = await apiFetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -170,23 +196,28 @@ function needsOnboarding() {
   const weekOf = defaultWeekOf();
   const weeks = (state.weekly && state.weekly.weeks) || [];
   const hasWeekly = weeks.some((w) => w.week_of === weekOf);
-  return { need: !hasWeekly || !hasGoals, weekOf, needGoals: !hasGoals };
+  const missingContext = !!state.goals?.setup_fields?.length;
+  return { need: !hasWeekly || !hasGoals || missingContext, weekOf, needWeekly: !hasWeekly };
 }
 
 function maybeStartOnboarding() {
   if (_onboardingDismissed || viewingArchive) return;
   if (document.querySelector(".onboarding-overlay")) return;
-  const { need, weekOf, needGoals } = needsOnboarding();
+  const { need, weekOf, needWeekly } = needsOnboarding();
   if (!need) return;
-  openOnboarding(weekOf, needGoals);
+  openOnboarding(weekOf, needWeekly);
 }
 
-function openOnboarding(weekOf, needGoals) {
+function openOnboarding(weekOf, needWeekly = true) {
+  const currentGoals = ((state.goals && state.goals.overall_goals) || []).slice();
   _onboardingState = {
-    step: "intro",
+    step: "goals",
     weekOf,
-    needGoals,
+    needWeekly,
     provider: "codex",
+    goalDraft: currentGoals.length ? currentGoals : [""],
+    setupFields: (state.goals?.setup_fields || []).slice(),
+    contextDraft: Object.fromEntries((state.goals?.setup_fields || []).map(field => [field.key, ''])),
     questions: [],
     answers: {},
     error: "",
@@ -217,13 +248,91 @@ function onboardingManualSetup() {
   openWeeklyAddForm();
 }
 
+function _captureOnboardingGoals() {
+  if (!_onboardingState) return;
+  _onboardingState.goalDraft = (_onboardingState.goalDraft || []).map((goal, i) => {
+    const el = $(`#onb-goal-${i}`);
+    return el ? el.value : goal;
+  });
+  for (const field of _onboardingState.setupFields) {
+    const el = $(`#onb-context-${field.key}`);
+    if (el) _onboardingState.contextDraft[field.key] = el.value;
+  }
+}
+
+function addOnboardingGoal() {
+  if (!_onboardingState) return;
+  _captureOnboardingGoals();
+  if (_onboardingState.goalDraft.length >= 12) {
+    _onboardingState.error = "Keep the goal list to 12 items or fewer.";
+    renderOnboarding();
+    return;
+  }
+  _onboardingState.goalDraft.push("");
+  _onboardingState.error = "";
+  renderOnboarding();
+  const fields = document.querySelectorAll(".onb-goal-input");
+  if (fields.length) fields[fields.length - 1].focus();
+}
+
+function removeOnboardingGoal(index) {
+  if (!_onboardingState) return;
+  _captureOnboardingGoals();
+  _onboardingState.goalDraft.splice(index, 1);
+  if (!_onboardingState.goalDraft.length) _onboardingState.goalDraft.push("");
+  renderOnboarding();
+}
+
+function saveOnboardingGoals() {
+  if (!_onboardingState) return;
+  _captureOnboardingGoals();
+  const goals = (_onboardingState.goalDraft || []).map((goal) => goal.trim()).filter(Boolean);
+  if (!goals.length) {
+    _onboardingState.error = "Add at least one goal before continuing.";
+    renderOnboarding();
+    return;
+  }
+  for (const field of _onboardingState.setupFields) {
+    if (!_onboardingState.contextDraft[field.key]?.trim()) {
+      _onboardingState.error = `Add ${field.label.toLowerCase()} before continuing.`;
+      renderOnboarding();
+      return;
+    }
+  }
+
+  _onboardingState.step = "saving-goals";
+  _onboardingState.error = "";
+  renderOnboarding();
+
+  _onboardingFetch("/api/onboarding/goals", { goals, context: _onboardingState.contextDraft })
+    .then(async (data) => {
+      if (!_onboardingState) return;
+      state.goals = data.goals;
+      _onboardingState.goalDraft = (data.goals.overall_goals || []).slice();
+      if (!_onboardingState.needWeekly) {
+        _onboardingDismissed = true;
+        closeOnboarding(true);
+        toast("Goals updated", "success");
+        await fetchAll();
+        return;
+      }
+      _onboardingState.step = "intro";
+      renderOnboarding();
+    })
+    .catch((err) => {
+      if (!_onboardingState) return;
+      _onboardingState.step = "goals";
+      _onboardingState.error = err.message || "Could not save goals.";
+      renderOnboarding();
+    });
+}
+
 function startOnboardingQuestions() {
   if (!_onboardingState) return;
   _onboardingState.step = "loading";
   _onboardingState.error = "";
   renderOnboarding();
   _onboardingFetch("/api/onboarding/questions", {
-    need_goals: _onboardingState.needGoals,
     provider: _onboardingState.provider,
   })
     .then((data) => {
@@ -260,8 +369,8 @@ function submitOnboarding() {
     .map((q) => ({ id: q.id, label: q.label, answer: (_onboardingState.answers[q.id] || "").trim() }))
     .filter((a) => a.answer);
 
-  if (answers.length < Math.min(2, qs.length)) {
-    _onboardingState.error = "Answer at least a couple of questions so the draft is useful.";
+  if (answers.length < 4) {
+    _onboardingState.error = "Answer at least four questions so the weekly focus is grounded.";
     renderOnboarding();
     return;
   }
@@ -271,7 +380,6 @@ function submitOnboarding() {
   renderOnboarding();
 
   _onboardingFetch("/api/onboarding/generate", {
-    need_goals: _onboardingState.needGoals,
     provider: _onboardingState.provider,
     answers,
   })
@@ -300,8 +408,22 @@ function _onboardingProviderField() {
   return `
     <label class="onb-provider">
       <span>Runner</span>
-      <select class="run-menu-select" onchange="setOnboardingProvider(this.value)">${options}</select>
-    </label>`;
+      <span class="provider-select">${providerLogo(_onboardingState.provider)}<select class="run-menu-select" onchange="setOnboardingProvider(this.value)">${options}</select></span>
+    </label>
+    <p class="connection-note">API options share saved goals, project context, outcome summaries, and your answers with the selected provider. Configure credentials in Setting → API connections first.</p>`;
+}
+
+function _onboardingGuidance() {
+  return `
+    <div class="onb-guidance">
+      <div class="onb-guidance-title">Guidance</div>
+      <ul>
+        <li>Choose 2-4 outcomes that move a saved goal or active project.</li>
+        <li>Include fixed commitments and be realistic about your time and energy.</li>
+        <li>Name likely blockers and what you are willing to defer.</li>
+        <li>Describe what “done” should look like by the end of the week.</li>
+      </ul>
+    </div>`;
 }
 
 function _onboardingBody() {
@@ -309,19 +431,58 @@ function _onboardingBody() {
   const week = shortDate(s.weekOf);
   const errorHtml = s.error ? `<div class="form-error">${esc(s.error)}</div>` : "";
 
-  if (s.step === "loading" || s.step === "generating") {
-    const msg = s.step === "loading" ? "Thinking of a few good questions…" : "Drafting your weekly focus…";
+  if (s.step === "saving-goals" || s.step === "loading" || s.step === "generating") {
+    const msg =
+      s.step === "saving-goals"
+        ? "Saving your goals…"
+        : s.step === "loading"
+          ? "Preparing focused questions…"
+          : "Drafting your weekly focus…";
     return `
-      <div class="onb-kicker">Weekly setup</div>
+      <div class="onb-kicker">Weekly setup · ${s.step === "saving-goals" ? "Step 1 of 2" : "Step 2 of 2"}</div>
       <h2 class="onb-title">Week of ${esc(week)}</h2>
       <div class="onb-loading"><span class="spinner"></span><span>${esc(msg)}</span></div>`;
   }
 
+  if (s.step === "goals") {
+    return `
+      <div class="onb-kicker">Weekly setup · Step 1 of 2</div>
+      <h2 class="onb-title">Review your goals before choosing this week’s work</h2>
+      <p class="onb-lead">Review your goals and fill in any missing planning context. Existing context stays as saved.</p>
+      ${errorHtml}
+      <div class="onb-goals">
+        ${(s.goalDraft || [])
+          .map(
+            (goal, i) => `
+          <div class="onb-goal-row">
+            <label class="onb-goal-label" for="onb-goal-${i}">Goal ${i + 1}</label>
+            <div class="onb-goal-control">
+              <textarea class="task-form-input onb-goal-input" id="onb-goal-${i}" rows="3" placeholder="What longer-term outcome are you working toward?">${esc(goal)}</textarea>
+              <button type="button" class="onb-goal-remove" onclick="removeOnboardingGoal(${i})" aria-label="Remove goal ${i + 1}">Remove</button>
+            </div>
+          </div>`
+          )
+          .join("")}
+      </div>
+      <button type="button" class="onb-add-goal" onclick="addOnboardingGoal()">+ Add another goal</button>
+      ${s.setupFields.length ? `<div class="onb-fields">${s.setupFields.map(field => `
+        <label class="onb-field" for="onb-context-${esc(field.key)}">
+          <span class="onb-q-label">${esc(field.label)}</span>
+          <span class="onb-q-help">${esc(field.help)}</span>
+          <textarea class="task-form-input" id="onb-context-${esc(field.key)}" rows="3" maxlength="4000">${esc(s.contextDraft[field.key] || '')}</textarea>
+        </label>`).join('')}</div>` : ''}
+      <div class="onb-actions">
+        <button type="button" class="form-btn form-btn-secondary" onclick="dismissOnboarding()">Skip for now</button>
+        <button type="button" class="form-btn form-btn-primary" onclick="saveOnboardingGoals()">Save goals and continue</button>
+      </div>`;
+  }
+
   if (s.step === "questions") {
     return `
-      <div class="onb-kicker">Weekly setup</div>
-      <h2 class="onb-title">A few questions for the week of ${esc(week)}</h2>
-      <p class="onb-lead">Your answers are turned into a concrete weekly focus you can edit anytime.</p>
+      <div class="onb-kicker">Weekly setup · Step 2 of 2</div>
+      <h2 class="onb-title">What do you want to work on this week?</h2>
+      <p class="onb-lead">Answer at least four focused questions for the week of ${esc(week)}. Short, specific answers are better than a complete task dump.</p>
+      ${_onboardingGuidance()}
       ${errorHtml}
       <div class="onb-fields">
         ${(s.questions || [])
@@ -335,7 +496,6 @@ function _onboardingBody() {
           )
           .join("")}
       </div>
-      ${_onboardingProviderField()}
       <div class="onb-actions">
         <button type="button" class="form-btn form-btn-secondary" onclick="dismissOnboarding()">Skip for now</button>
         <button type="button" class="form-btn form-btn-primary" onclick="submitOnboarding()">Generate weekly focus</button>
@@ -345,7 +505,7 @@ function _onboardingBody() {
 
   if (s.step === "error") {
     return `
-      <div class="onb-kicker">Weekly setup</div>
+      <div class="onb-kicker">Weekly setup · Step 2 of 2</div>
       <h2 class="onb-title">Couldn't reach the assistant</h2>
       ${errorHtml}
       <div class="onb-actions">
@@ -356,17 +516,14 @@ function _onboardingBody() {
   }
 
   // intro
-  const lead = s.needGoals
-    ? `You don't have goals or a focus for this week yet. Answer a few quick questions and I'll draft both.`
-    : `There's no focus set for the week of ${esc(week)} yet. Answer a few quick questions and I'll draft one.`;
   return `
-    <div class="onb-kicker">Weekly setup</div>
-    <h2 class="onb-title">Let's set your focus for the week of ${esc(week)}</h2>
-    <p class="onb-lead">${lead}</p>
+    <div class="onb-kicker">Weekly setup · Step 2 of 2</div>
+    <h2 class="onb-title">Choose how to shape this week’s focus</h2>
+    <p class="onb-lead">Your goals are saved. Choose the runner that will prepare 6-8 focused questions for the week of ${esc(week)}.</p>
     ${_onboardingProviderField()}
     <div class="onb-actions">
       <button type="button" class="form-btn form-btn-secondary" onclick="dismissOnboarding()">Skip for now</button>
-      <button type="button" class="form-btn form-btn-primary" onclick="startOnboardingQuestions()">Start</button>
+      <button type="button" class="form-btn form-btn-primary" onclick="startOnboardingQuestions()">Choose this week’s work</button>
     </div>`;
 }
 
@@ -386,7 +543,16 @@ function renderOnboarding() {
 // ── Tabs ──
 
 function switchTab(tab) {
-  $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
+  if (tab === "connections") loadConnections();
+  const inSetting = tab === "connections" || tab === "docs";
+  $("#setting-sections").classList.toggle("hidden", !inSetting);
+  $$("[data-section]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.section === tab)));
+  $$(".tab").forEach(button => {
+    const active = button.dataset.tab === tab || (inSetting && button.dataset.tab === "connections");
+    button.classList.toggle("active", active);
+    if (active) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  });
   $$(".tab-content").forEach((c) => c.classList.toggle("hidden", c.id !== `tab-${tab}`));
   if (tab !== "today") {
     editingIndex = -1;
@@ -418,7 +584,7 @@ function switchTab(tab) {
 
 async function fetchMorningStatus() {
   try {
-    return await fetch("/api/morning-status").then((r) => r.json());
+    return await apiFetch("/api/morning-status").then((r) => r.json());
   } catch (e) {
     return {
       status: "unknown",
@@ -431,13 +597,13 @@ async function fetchMorningStatus() {
 
 async function fetchAll() {
   const [today, goals, projects, weekly, outcomes, stats, dates, morning] = await Promise.all([
-    fetch("/api/today").then((r) => r.json()),
-    fetch("/api/goals").then((r) => r.json()),
-    fetch("/api/projects").then((r) => r.json()),
-    fetch("/api/weekly-focus").then((r) => r.json()),
-    fetch("/api/outcomes").then((r) => r.json()),
-    fetch("/api/stats").then((r) => r.json()),
-    fetch("/api/available-dates").then((r) => r.json()),
+    apiFetch("/api/today").then((r) => r.json()),
+    apiFetch("/api/goals").then((r) => r.json()),
+    apiFetch("/api/projects").then((r) => r.json()),
+    apiFetch("/api/weekly-focus").then((r) => r.json()),
+    apiFetch("/api/outcomes").then((r) => r.json()),
+    apiFetch("/api/stats").then((r) => r.json()),
+    apiFetch("/api/available-dates").then((r) => r.json()),
     fetchMorningStatus(),
   ]);
   state = { today, goals, projects, weekly, outcomes, stats, morning };
@@ -554,12 +720,12 @@ function renderTasks(tasks) {
       .map(([k, v]) => `<span class="task-meta-tag">${esc(prettyLabel(k))}: ${esc(prettyLabel(v))}</span>`)
       .join("");
 
-    const checkbox = inactive
+    const checkbox = inactive || !editable
       ? `<span class="task-checkbox" aria-hidden="true">${checkSvg()}</span>`
       : `<button type="button" class="task-checkbox" role="checkbox" aria-checked="${task.checked ? "true" : "false"}" aria-label="Toggle task complete" onclick="event.stopPropagation(); toggleTask(${i})">${checkSvg()}</button>`;
 
     html += `
-      <div class="${cls}" data-index="${i}" ${inactive ? "" : `onclick="toggleTask(${i})"`}>
+      <div class="${cls}" data-index="${i}" ${inactive || !editable ? "" : `onclick="toggleTask(${i})"`}>
         ${checkbox}
         <div class="task-body">
           <div class="task-top-row">
@@ -570,7 +736,7 @@ function renderTasks(tasks) {
           </div>
           <div class="task-title">${esc(task.title)}</div>
           ${task.discipline ? `<div class="task-discipline">${esc(task.discipline)}</div>` : ""}
-          ${metaTags ? `<div class="task-meta">${metaTags}</div>` : ""}
+          ${metaTags ? `<details class="task-meta" onclick="event.stopPropagation()"><summary>Task details</summary><div class="task-meta-tags">${metaTags}</div></details>` : ""}
         </div>
         ${editable ? `<div class="task-actions" onclick="event.stopPropagation()">
           <button class="task-action-btn" onclick="startEdit(${i})" title="Edit" aria-label="Edit task">&#9998;</button>
@@ -689,29 +855,24 @@ function renderMethodology(today) {
     </div>`;
 }
 
-function renderFeedback(feedback) {
-  if (!feedback) return "";
-  return `
-    <div class="section">
-      <div class="section-header"><span class="section-title">Feedback for Tomorrow</span></div>
-      <div class="feedback-card">
-        <div class="feedback-field">
-          <div class="feedback-label">What worked</div>
-          <textarea class="feedback-input" rows="2" placeholder="What went well today..."
-            data-field="worked" onblur="saveFeedback(this)">${esc(feedback.worked || "")}</textarea>
-        </div>
-        <div class="feedback-field">
-          <div class="feedback-label">What didn't work</div>
-          <textarea class="feedback-input" rows="2" placeholder="What to avoid or change..."
-            data-field="did_not_work" onblur="saveFeedback(this)">${esc(feedback.did_not_work || "")}</textarea>
-        </div>
-        <div class="feedback-field">
-          <div class="feedback-label">New goal or constraint</div>
-          <textarea class="feedback-input" rows="2" placeholder="Anything new to factor in..."
-            data-field="new_goal" onblur="saveFeedback(this)">${esc(feedback.new_goal || "")}</textarea>
-        </div>
-      </div>
-    </div>`;
+function renderFeedback(feedback = {}, readOnly = false) {
+  const fields = [
+    { key: "worked", label: "What worked", placeholder: "What went well today..." },
+    { key: "did_not_work", label: "What didn't work", placeholder: "What to avoid or change..." },
+    { key: "new_goal", label: "New goal or constraint", placeholder: "Anything new to factor in..." },
+  ];
+  return `<section class="section">
+    <div class="section-header"><h2 class="section-title">Feedback for Tomorrow</h2></div>
+    <div class="feedback-card">${fields.map(field => `
+      <div class="feedback-field">
+        ${readOnly
+          ? `<div class="feedback-label">${field.label}</div><p>${esc(feedback[field.key] || "No feedback recorded.")}</p>`
+          : `<label class="feedback-label" for="feedback-${field.key}">${field.label}</label>
+             <textarea id="feedback-${field.key}" class="feedback-input" rows="3"
+               placeholder="${field.placeholder}" data-field="${field.key}"
+               onblur="saveFeedback(this)">${esc(feedback[field.key] || "")}</textarea>`}
+      </div>`).join("")}</div>
+  </section>`;
 }
 
 function renderContext() {
@@ -808,7 +969,7 @@ function renderToolbar(today) {
   return `
     <div class="toolbar">
       <div class="run-picker" id="run-picker">
-        <button class="toolbar-btn run-btn" onclick="toggleRunMenu(event)" id="run-btn" title="Choose a CLI runner for today's PM flow">
+        <button class="toolbar-btn run-btn" onclick="toggleRunMenu(event)" id="run-btn" title="Choose a CLI or API connection for today's PM flow">
           <span class="run-icon">&#9654;</span> Run Today's Flow
         </button>
         <div class="run-menu ${runMenuOpen ? "" : "hidden"}" id="run-menu">
@@ -817,7 +978,7 @@ function renderToolbar(today) {
           <div class="run-menu-heading">Runner</div>
           ${Object.entries(RUN_PROVIDERS).map(([key, provider]) => `
             <button class="run-menu-item" onclick="runTodayFlow('${key}')">
-              <span class="run-menu-label">${provider.label}</span>
+              <span class="run-menu-label">${providerLogo(key)}${provider.label}</span>
               <span class="run-menu-meta">${provider.meta}</span>
             </button>
           `).join("")}
@@ -933,24 +1094,38 @@ function render() {
   const isCurrentDay = today.date === todayDate;
   const showStaleWarning = !viewingArchive && !isCurrentDay;
 
-  app.innerHTML = `
-    ${renderToolbar(today)}
-    ${!viewingArchive ? renderMorningBanner() : ""}
-    <div class="header">
-      <div class="header-date">${formatDate(today.date)}</div>
-      <div class="header-title">${viewingArchive ? "Archived Plan" : "Today's Plan"}</div>
-      ${showStaleWarning ? `<div class="header-subtitle">This plan is from a previous day</div>` : ""}
-      ${viewingArchive ? `<div class="header-subtitle archive-label">Viewing archived plan</div>` : ""}
-    </div>
-    <div class="section">
-      <div class="section-header"><span class="section-title">Tasks</span><span class="section-count">${today.tasks.length}</span></div>
-      ${renderTasks(today.tasks)}
-    </div>
-    ${!viewingArchive ? renderMethodology(today) : ""}
+  const context = `${!viewingArchive ? renderMethodology(today) : ""}
     ${renderInfoSection("carry", "Carry-forward", today.carry_forward)}
     ${renderInfoSection("heads", "Heads-up", today.heads_up)}
-    ${!viewingArchive ? renderFeedback(today.feedback) : ""}
     ${!viewingArchive ? renderContext() : ""}`;
+  const statusNeedsAttention = ["stale", "missing", "failed", "running"].includes(state.morning?.status);
+
+  app.innerHTML = `
+    <div class="today-heading">
+      <div class="header">
+        <div class="header-date">${formatDate(today.date)}</div>
+        <h1 class="header-title">${viewingArchive ? "Archived Plan" : "Today's Plan"}</h1>
+        ${showStaleWarning ? `<div class="header-subtitle">This plan is from a previous day</div>` : ""}
+        ${viewingArchive ? `<div class="header-subtitle archive-label">Viewing archived plan</div>` : ""}
+      </div>
+      ${renderToolbar(today)}
+    </div>
+    ${!viewingArchive && statusNeedsAttention ? renderMorningBanner() : ""}
+    <div class="today-workspace">
+      <div class="today-primary">
+        <section class="section">
+          <div class="section-header"><h2 class="section-title">Today's work</h2></div>
+          ${renderTasks(today.tasks)}
+          ${!today.tasks.length && !viewingArchive ? (showAddForm ? renderTaskForm(null, -1) : `<button class="add-task-btn" onclick="openAddForm()">+ Add Task</button>`) : ""}
+        </section>
+        <details class="today-disclosure"><summary>Planning context</summary>${context}</details>
+      </div>
+      <aside class="today-review" aria-label="Feedback for tomorrow">
+        ${renderFeedback(today.feedback || {}, viewingArchive)}
+        ${!viewingArchive ? `<p class="feedback-hint">Saved when you leave each field. Use this to shape tomorrow’s plan.</p>` : ""}
+      </aside>
+    </div>
+    ${!viewingArchive && !statusNeedsAttention ? `<details class="today-disclosure"><summary>Planner status</summary>${renderMorningBanner()}</details>` : ""}`;
 
   window.scrollTo(0, scrollY);
   if (_runActive) _showRunPanel();
@@ -958,7 +1133,7 @@ function render() {
 
 async function toggleTask(index) {
   try {
-    const res = await fetch("/api/toggle-task", {
+    const res = await apiFetch("/api/toggle-task", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ index }),
@@ -978,9 +1153,11 @@ async function toggleTask(index) {
 async function saveFeedback(el) {
   const field = el.dataset.field;
   const value = el.value.trim();
+  const planDate = state.today?.date;
+  if (viewingArchive) return;
   if (value === (el.defaultValue || "").trim()) return; // nothing changed
   try {
-    const res = await fetch("/api/update-feedback", {
+    const res = await apiFetch("/api/update-feedback", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ field, value }),
@@ -988,6 +1165,14 @@ async function saveFeedback(el) {
     if (!res.ok) {
       toast("Couldn't save feedback", "error");
       return;
+    }
+    const result = await res.json();
+    if (!result.ok) {
+      toast("Couldn't save feedback", "error");
+      return;
+    }
+    if (state.today?.date === planDate && !viewingArchive) {
+      state.today.feedback = { ...state.today.feedback, [field]: value };
     }
     el.defaultValue = value;
     toast("Feedback saved", "success");
@@ -1044,7 +1229,7 @@ async function saveTask(index) {
   const body = index === -1 ? data : { index, ...data };
 
   try {
-    const res = await fetch(url, {
+    const res = await apiFetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -1073,7 +1258,7 @@ async function deleteTask(index) {
   if (!ok) return;
 
   try {
-    const res = await fetch("/api/delete-task", {
+    const res = await apiFetch("/api/delete-task", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ index }),
@@ -1102,7 +1287,7 @@ async function loadDate(dateStr) {
     return;
   }
 
-  const res = await fetch(`/api/archive/${dateStr}`);
+  const res = await apiFetch(`/api/archive/${dateStr}`);
   if (res.ok) {
     state.today = await res.json();
     viewingArchive = true;
@@ -1177,6 +1362,7 @@ function _hideRunPanel() {
 }
 
 async function runTodayFlow(provider = "codex") {
+  if (provider.startsWith("api:")) { runMenuOpen = false; openApiPlan(provider.slice(4)); return; }
   const btn = $("#run-btn");
   if (!btn) return;
 
@@ -1202,7 +1388,7 @@ async function runTodayFlow(provider = "codex") {
   _showRunPanel(providerLabel, runPayload.label);
 
   try {
-    const res = await fetch("/api/run-today", {
+    const res = await apiFetch("/api/run-today", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ provider, mode: runPayload.mode, focus: runPayload.focus }),
@@ -1229,7 +1415,7 @@ async function runTodayFlow(provider = "codex") {
 }
 
 async function pollRunStatus() {
-  const res = await fetch("/api/run-status");
+  const res = await apiFetch("/api/run-status");
   const data = await res.json();
   const providerLabel = data.provider_label || runProviderLabel(_activeRunProvider);
 
@@ -1278,9 +1464,8 @@ function toggleSection(id) {
 }
 
 function esc(str) {
-  const div = document.createElement("div");
-  div.textContent = str || "";
-  return div.innerHTML;
+  const entities = {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"};
+  return String(str ?? "").replace(/[&<>"']/g, char => entities[char]);
 }
 
 function safeHref(url) {
@@ -1297,7 +1482,7 @@ function safeHref(url) {
 
 async function fetchProjectDocs() {
   try {
-    driveDocsData = await fetch("/api/recent-docs").then((r) => r.json());
+    driveDocsData = await apiFetch("/api/recent-docs").then((r) => r.json());
   } catch (e) {
     driveDocsData = { error: e.message || "Unable to load recent docs" };
   }
@@ -1432,20 +1617,6 @@ function renderProjectEditor(projects) {
   return renderProjectForm(project, editingProjectIndex);
 }
 
-function renderProjectClosedSection(projects) {
-  if (!projects.length) return "";
-
-  return `
-    <section class="project-closed-section">
-      <div class="project-lane-header">
-        <span>Closed</span>
-        <span>${projects.length}</span>
-      </div>
-      <div class="project-card-list project-closed-list">
-        ${projects.map((project) => renderProjectCard(project, project.index)).join("")}
-      </div>
-    </section>`;
-}
 
 function _readProjectForm() {
   return {
@@ -1463,6 +1634,7 @@ function openProjectAddForm() {
   editingProjectIndex = -1;
   projectError = "";
   renderProjects();
+  document.querySelector("#pf-name")?.focus();
 }
 
 function startProjectEdit(index) {
@@ -1470,6 +1642,7 @@ function startProjectEdit(index) {
   showProjectAddForm = false;
   projectError = "";
   renderProjects();
+  document.querySelector("#pf-name")?.focus();
 }
 
 function cancelProjectEdit() {
@@ -1489,7 +1662,7 @@ async function saveProject(index) {
 
   const url = index === -1 ? "/api/add-project" : "/api/edit-project";
   const body = index === -1 ? data : { index, ...data };
-  const res = await fetch(url, {
+  const res = await apiFetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -1520,7 +1693,7 @@ async function deleteProject(index) {
   if (!ok) return;
 
   try {
-    const res = await fetch("/api/delete-project", {
+    const res = await apiFetch("/api/delete-project", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ index }),
@@ -1542,72 +1715,72 @@ async function deleteProject(index) {
   }
 }
 
+function layoutTone(value) {
+  return ({Now:'green', Next:'blue', Later:'violet', Active:'green', Paused:'amber', Closed:'neutral'})[value] || 'neutral';
+}
+
+function layoutBadge(label, tone = 'neutral') {
+  return `<span class="layout-badge tone-${tone}">${esc(label)}</span>`;
+}
+
+function projectTags(project) {
+  return `<span class="layout-project-tags">${layoutBadge(project.priority, layoutTone(project.priority))}${layoutBadge(project.status, layoutTone(project.status))}</span>`;
+}
+
+function weekProgress(week) {
+  const items = weeklyPriorityItems(week), completed = items.filter(item => item.checked).length;
+  if(!items.length) return `<span class="layout-progress-block">${layoutBadge('No outcomes yet')}</span>`;
+  return `<span class="layout-progress-block">${layoutBadge(`${completed} of ${items.length} completed`, completed === items.length ? 'green' : 'blue')}<progress class="layout-progress" max="${items.length}" value="${completed}" aria-label="Weekly outcomes completed">${completed} of ${items.length}</progress></span>`;
+}
+
+function projectDetail(p) {
+  const docs = projectDocs(p), tasks = projectTasks(p);
+  return `<div class="layout-detail">${p.discipline?`<p class="layout-meta">${esc(p.discipline)}</p>`:''}${p.notes?`<p>${esc(p.notes)}</p>`:''}${tasks.length?`<h3>Today’s work</h3>${tasks.map(t=>`<p>${esc(t.title)}</p>`).join('')}`:''}${docs.length?`<h3>Related documents</h3>${docs.map(renderProjectDocLink).join('')}`:''}<div class="layout-actions"><button class="form-btn" onclick="startProjectEdit(${p.index})">Edit project</button><button class="form-btn" onclick="deleteProject(${p.index})">Delete project</button></div></div>`;
+}
+
+function projectRow(p) {
+  return `<details class="layout-project-row"><summary><span class="layout-project-name">${esc(p.name)}</span>${projectTags(p)}<span class="layout-next">${esc(p.next_action || 'Next action not set')}</span><span class="layout-expand">Details</span></summary>${projectDetail(p)}</details>`;
+}
+
+function weekOutcomes(week) {
+  return `<ol class="layout-outcomes">${weeklyPriorityItems(week).map((p,i)=>`<li class="${p.checked?'is-done':''}"><span class="layout-outcome-number">${i+1}</span><div><p>${esc(p.text)}</p>${layoutBadge(p.checked ? 'Completed' : 'Open', p.checked ? 'green' : 'blue')}</div></li>`).join('')}</ol>`;
+}
+
+function weekDetail(week) {
+  return `${week.why?`<p class="layout-week-theme">${esc(week.why)}</p>`:''}${weekOutcomes(week)}${week.notes?`<details class="layout-week-notes"><summary>Notes</summary><p>${esc(week.notes)}</p></details>`:''}<div class="layout-actions"><button class="form-btn" onclick="startWeeklyEdit(${week.index})">Edit week</button><button class="form-btn" onclick="deleteWeeklyFocus(${week.index})">Delete week</button></div>`;
+}
+
+function weeklyRows(weeks) {
+  return `<div class="layout-week-rows">${weeks.map(w=>{return `<details class="layout-week-row"><summary><span>Week of ${esc(shortDate(w.week_of))}</span>${weekProgress(w)}<span class="layout-expand">View</span></summary><div class="layout-week-body">${weekDetail(w)}</div></details>`;}).join('')}</div>`;
+}
+
+function weeklyFocusView(weeks) {
+  const week=weeks[0];
+  return `<section class="layout-week-focus"><p class="layout-eyebrow">Week of ${esc(shortDate(week.week_of))}</p><h2>${esc(week.why || 'This week’s outcomes')}</h2>${weekProgress(week)}${weekOutcomes(week)}${week.notes?`<details class="layout-week-notes"><summary>Planning notes</summary><p>${esc(week.notes)}</p></details>`:''}<div class="layout-actions"><button class="form-btn" onclick="startWeeklyEdit(${week.index})">Edit this week</button><button class="form-btn" onclick="deleteWeeklyFocus(${week.index})">Delete week</button></div></section><details class="layout-history"><summary>Previous weeks · ${weeks.length-1}</summary>${weeks.length>1?weeklyRows(weeks.slice(1)):'<p class="layout-meta">Earlier weeks appear here when saved.</p>'}</details>`;
+}
+
 function renderProjects() {
   const el = $("#projects");
   if (!el) return;
-
   if (state.projects === null) {
-    el.innerHTML = `<div class="loading">Loading projects...</div>`;
+    el.innerHTML = '<div class="loading">Loading projects...</div>';
     return;
   }
-
-  const projects = (state.projects || []).map((project, index) => ({
-    ...project,
-    index: projectIndex(project, index),
-  }));
-  if (projects.length === 0) {
-    el.innerHTML = `
-      <div class="empty-state"><div class="empty-state-title">No projects found</div><p>Add a project to build a portfolio view.</p></div>
-      <button class="add-task-btn add-project-btn" onclick="openProjectAddForm()">+ Add Project</button>
-      ${renderProjectEditor(projects)}`;
+  const projects = (state.projects || []).map((project, index) => ({...project, index: projectIndex(project, index)}));
+  if (!projects.length) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-state-title">No projects found</div><p>Add a project to build a portfolio view.</p></div><button class="add-task-btn add-project-btn" onclick="openProjectAddForm()">+ Add Project</button>${renderProjectEditor(projects)}`;
     return;
   }
-
-  const openProjects = projects.filter((project) => project.status !== "Closed");
-  const closedProjects = projects.filter((project) => project.status === "Closed");
-  const active = projects.filter((project) => project.status === "Active");
-  const now = openProjects.filter((project) => project.priority === "Now");
-  const withActions = openProjects.filter((project) => project.next_action);
-  const linkedDocs = projects.filter((project) => projectDocs(project).length > 0);
-  const candidate = selectProjectPullCandidate(openProjects);
-  const docsNote = driveDocsData && driveDocsData.error ? "docs cache unavailable" : `${linkedDocs.length} with recent docs`;
-  const statusNote = `${active.length} active${closedProjects.length ? ` &middot; ${closedProjects.length} closed` : ""}`;
-
+  const open = projects.filter(project => project.status !== "Closed");
+  const closed = projects.filter(project => project.status === "Closed");
+  const candidate = selectProjectPullCandidate(open);
+  const docsNote = driveDocsData?.error ? "Documents unavailable" : `${projects.filter(project => projectDocs(project).length).length} with recent documents`;
   el.innerHTML = `
-    <div class="projects-header">
-      <h1>Projects</h1>
-      <p>${projects.length} projects &middot; ${statusNote} &middot; ${docsNote}</p>
-    </div>
-
-    <div class="summary-grid project-summary">
-      <div class="summary-card">
-        <div class="big-number green">${now.length}</div>
-        <div class="card-label">Now</div>
-      </div>
-      <div class="summary-card">
-        <div class="big-number">${active.length}</div>
-        <div class="card-label">Active</div>
-      </div>
-      <div class="summary-card">
-        <div class="big-number amber">${withActions.length}</div>
-        <div class="card-label">Next Actions</div>
-      </div>
-      <div class="summary-card">
-        <div class="big-number blue">${linkedDocs.length}</div>
-        <div class="card-label">Doc Linked</div>
-      </div>
-    </div>
-
+    <div class="projects-header"><h1>Projects</h1><p>${projects.length} projects · ${projects.filter(project => project.status === "Active").length} active · ${open.filter(project => project.priority === "Now").length} now · ${docsNote}</p></div>
     ${projectError && !showProjectAddForm && editingProjectIndex === -1 ? `<div class="form-error project-global-error">${esc(projectError)}</div>` : ""}
-    ${candidate ? renderProjectPull(candidate) : ""}
-
-    <div class="project-board">
-      ${renderProjectLane("Now", openProjects.filter((project) => project.priority === "Now"))}
-      ${renderProjectLane("Next", openProjects.filter((project) => project.priority === "Next"))}
-      ${renderProjectLane("Later", openProjects.filter((project) => project.priority === "Later"))}
-    </div>
-    ${renderProjectClosedSection(closedProjects)}
-
+    <div class="layout-content">${open.length ? `<div class="layout-row-header"><span>Project</span><span>Priority / status</span><span>Next action</span><span></span></div>${open.map(projectRow).join("")}` : '<p class="layout-meta">All projects are closed.</p>'}</div>
+    ${candidate ? `<details class="layout-history"><summary>Daily planning candidate</summary>${renderProjectPull(candidate)}</details>` : ""}
+    ${closed.length ? `<details class="layout-history"><summary>Closed projects · ${closed.length}</summary>${closed.map(projectRow).join("")}</details>` : ""}
     <button class="add-task-btn add-project-btn" onclick="openProjectAddForm()">+ Add Project</button>
     ${renderProjectEditor(projects)}`;
 }
@@ -1630,43 +1803,7 @@ function renderProjectPull(project) {
     </section>`;
 }
 
-function renderProjectLane(title, projects) {
-  return `
-    <section class="project-lane">
-      <div class="project-lane-header">
-        <span>${esc(title)}</span>
-        <span>${projects.length}</span>
-      </div>
-      <div class="project-card-list">
-        ${projects.length ? projects.map((project, i) => renderProjectCard(project, projectIndex(project, i))).join("") : `<div class="project-empty">No ${esc(title.toLowerCase())} projects</div>`}
-      </div>
-    </section>`;
-}
 
-function renderProjectCard(project, index) {
-  const docs = projectDocs(project).slice(0, 2);
-  const tasks = projectTasks(project).slice(0, 1);
-  const statusClass = normalizeMatch(project.status).replace(/\s+/g, "-");
-  const priorityClass = normalizeMatch(project.priority).replace(/\s+/g, "-");
-
-  return `
-    <article class="project-card ${priorityClass}">
-      <div class="project-card-top">
-        <span class="project-priority ${priorityClass}">${esc(project.priority)}</span>
-        <span class="project-status ${statusClass}">${esc(project.status)}</span>
-      </div>
-      <div class="project-title">${esc(project.name)}</div>
-      ${project.discipline ? `<div class="project-discipline">${esc(project.discipline)}</div>` : ""}
-      ${project.next_action ? `<div class="project-field"><span>Next action</span><p>${esc(project.next_action)}</p></div>` : ""}
-      ${tasks.length ? `<div class="project-field"><span>Today</span><p>${esc(tasks[0].title)}</p></div>` : ""}
-      ${project.notes ? `<div class="project-notes">${esc(project.notes)}</div>` : ""}
-      ${docs.length ? `<div class="project-docs">${docs.map(renderProjectDocLink).join("")}</div>` : ""}
-      <div class="task-actions project-actions" onclick="event.stopPropagation()">
-        <button class="task-action-btn" onclick="startProjectEdit(${index})" title="Edit">&#9998;</button>
-        <button class="task-action-btn task-action-delete" onclick="deleteProject(${index})" title="Delete">&times;</button>
-      </div>
-    </article>`;
-}
 
 function renderProjectDocLink(doc) {
   const href = safeHref(doc.url || "");
@@ -1711,7 +1848,7 @@ function renderWeeklyForm(week, index) {
   const weekOf = week ? week.week_of : defaultWeekOf();
   const why = week ? week.why || "" : "";
   const notes = week ? week.notes || "" : "";
-  const priorities = weeklyPriorityItems(week || {});
+  const priorities = [...weeklyPriorityItems(week || {})];
   while (priorities.length < 3) {
     priorities.push({ number: priorities.length + 1, checked: false, text: "" });
   }
@@ -1792,6 +1929,7 @@ function openWeeklyAddForm() {
   editingWeeklyIndex = -1;
   weeklyError = "";
   renderWeeklyFocus();
+  document.querySelector("#wf-week-of")?.focus();
 }
 
 function startWeeklyEdit(index) {
@@ -1799,6 +1937,7 @@ function startWeeklyEdit(index) {
   showWeeklyAddForm = false;
   weeklyError = "";
   renderWeeklyFocus();
+  document.querySelector("#wf-week-of")?.focus();
 }
 
 function cancelWeeklyEdit() {
@@ -1823,7 +1962,7 @@ async function saveWeeklyFocus(index) {
 
   const url = index === -1 ? "/api/add-weekly-focus" : "/api/edit-weekly-focus";
   const body = index === -1 ? data : { index, ...data };
-  const res = await fetch(url, {
+  const res = await apiFetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -1851,7 +1990,7 @@ async function deleteWeeklyFocus(index) {
   });
   if (!ok) return;
 
-  const res = await fetch("/api/delete-weekly-focus", {
+  const res = await apiFetch("/api/delete-weekly-focus", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ index }),
@@ -1874,94 +2013,20 @@ async function deleteWeeklyFocus(index) {
 function renderWeeklyFocus() {
   const el = $("#weekly-focus");
   if (!el) return;
-
   const weeks = weeklyFocusWeeks();
-  if (!state.weekly || weeks.length === 0) {
-    el.innerHTML = `
-      <div class="empty-state"><div class="empty-state-title">No weekly focus found</div><p>Add a weekly focus to set the active planning theme.</p></div>
-      <button class="add-task-btn add-project-btn" onclick="openWeeklyAddForm()">+ Add Weekly Focus</button>
-      ${renderWeeklyEditor(weeks)}`;
+  if (!state.weekly || !weeks.length) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-state-title">No weekly focus found</div><p>Add a weekly focus to set the active planning theme.</p></div><button class="add-task-btn add-project-btn" onclick="openWeeklyAddForm()">+ Add Weekly Focus</button>${renderWeeklyEditor(weeks)}`;
     return;
   }
-
-  const latest = weeks[0];
-  const activePriorities = weeklyPriorityItems(latest).filter((item) => !item.checked).length;
-  const completedPriorities = weeks.reduce(
-    (sum, week) => sum + weeklyPriorityItems(week).filter((item) => item.checked).length,
-    0
-  );
-  const withNotes = weeks.filter((week) => week.notes).length;
-
-  el.innerHTML = `
-    <div class="projects-header weekly-header">
-      <h1>Weekly Focus</h1>
-      <p>${weeks.length} weeks &middot; latest ${esc(shortDate(latest.week_of))} &middot; ${activePriorities} active priorities</p>
-    </div>
-
-    <div class="summary-grid project-summary">
-      <div class="summary-card">
-        <div class="big-number green">${weeklyPriorityItems(latest).length}</div>
-        <div class="card-label">Latest Priorities</div>
-      </div>
-      <div class="summary-card">
-        <div class="big-number amber">${activePriorities}</div>
-        <div class="card-label">Open This Week</div>
-      </div>
-      <div class="summary-card">
-        <div class="big-number">${completedPriorities}</div>
-        <div class="card-label">Checked Off</div>
-      </div>
-      <div class="summary-card">
-        <div class="big-number blue">${withNotes}</div>
-        <div class="card-label">With Notes</div>
-      </div>
-    </div>
-
+  const total = weeks.reduce((sum, week) => sum + weeklyPriorityItems(week).filter(item => item.checked).length, 0);
+  el.innerHTML = `<div class="projects-header weekly-header"><h1>Weekly</h1><p>${weeks.length} saved weeks · ${total} completed outcomes · latest ${esc(shortDate(weeks[0].week_of))}</p></div>
     ${weeklyError && !showWeeklyAddForm && editingWeeklyIndex === -1 ? `<div class="form-error project-global-error">${esc(weeklyError)}</div>` : ""}
-    ${renderWeeklyCurrent(latest)}
-    <div class="weekly-list">
-      ${weeks.map((week, position) => renderWeeklyCard(week, position)).join("")}
-    </div>
+    <div class="layout-content">${weeklyFocusView(weeks)}</div>
     <button class="add-task-btn add-project-btn" onclick="openWeeklyAddForm()">+ Add Weekly Focus</button>
     ${renderWeeklyEditor(weeks)}`;
 }
 
-function renderWeeklyCurrent(week) {
-  return `
-    <section class="project-pull weekly-current">
-      <div>
-        <div class="project-pull-label">Current Planning Theme</div>
-        <div class="project-pull-title">Week of ${esc(shortDate(week.week_of))}</div>
-        <p>${esc(week.why || "No weekly theme set yet.")}</p>
-      </div>
-      <span class="project-score" title="Open priorities">${weeklyPriorityItems(week).filter((item) => !item.checked).length}</span>
-    </section>`;
-}
 
-function renderWeeklyCard(week, position) {
-  const priorities = weeklyPriorityItems(week);
-  return `
-    <article class="project-card weekly-card">
-      <div class="project-card-top">
-        <span class="project-priority now">${esc(shortDate(week.week_of))}</span>
-        <span class="project-status ${position === 0 ? "active" : "paused"}">${position === 0 ? "Latest" : "History"}</span>
-      </div>
-      ${week.why ? `<div class="project-field"><span>Why this week</span><p>${esc(week.why)}</p></div>` : ""}
-      <div class="weekly-priority-list">
-        ${priorities.map((priority, i) => `
-          <div class="weekly-priority ${priority.checked ? "done" : ""}">
-            <span>${priority.checked ? checkSvg() : i + 1}</span>
-            <p>${esc(priority.text)}</p>
-          </div>
-        `).join("")}
-      </div>
-      ${week.notes ? `<div class="project-notes weekly-notes">${esc(week.notes)}</div>` : ""}
-      <div class="task-actions project-actions" onclick="event.stopPropagation()">
-        <button class="task-action-btn" onclick="startWeeklyEdit(${week.index})" title="Edit">&#9998;</button>
-        <button class="task-action-btn task-action-delete" onclick="deleteWeeklyFocus(${week.index})" title="Delete">&times;</button>
-      </div>
-    </article>`;
-}
 
 // ── Analytics tab ──
 
@@ -1992,7 +2057,7 @@ function prettyLabel(s) {
 }
 
 async function fetchAnalytics() {
-  analyticsData = await fetch("/api/analytics").then((r) => r.json());
+  analyticsData = await apiFetch("/api/analytics").then((r) => r.json());
   renderAnalytics();
 }
 
@@ -2422,7 +2487,7 @@ function renderHeatmap(days) {
 // ── Docs tab ──
 
 async function fetchDriveDocs() {
-  driveDocsData = await fetch("/api/recent-docs").then((r) => r.json());
+  driveDocsData = await apiFetch("/api/recent-docs").then((r) => r.json());
   renderDriveDocs();
 }
 
@@ -2533,3 +2598,5 @@ if (location.hash === "#projects") switchTab("projects");
 if (location.hash === "#weekly") switchTab("weekly");
 if (location.hash === "#analytics") switchTab("analytics");
 if (location.hash === "#docs") switchTab("docs");
+
+if (["#setting", "#settings", "#connections"].includes(location.hash)) switchTab("connections");

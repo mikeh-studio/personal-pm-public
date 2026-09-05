@@ -2419,10 +2419,94 @@ a.doc-title:hover {
   padding: 28px 0 12px;
 }
 
+.onb-guidance {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-hover);
+}
+
+.onb-guidance-title {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.onb-guidance ul {
+  margin: 7px 0 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.onb-guidance li + li {
+  margin-top: 3px;
+}
+
 .onb-fields {
   display: grid;
   gap: 14px;
   margin: 18px 0 4px;
+}
+
+.onb-goals {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.onb-goal-row {
+  display: grid;
+  gap: 5px;
+}
+
+.onb-goal-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.onb-goal-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+}
+
+.onb-goal-input {
+  min-height: 72px;
+  line-height: 1.35;
+  resize: vertical;
+}
+
+.onb-goal-remove,
+.onb-add-goal {
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.onb-goal-remove {
+  padding: 10px 4px;
+}
+
+.onb-add-goal {
+  margin-top: 10px;
+  padding: 4px 0;
+  color: var(--lime-dark);
+  font-weight: 700;
+}
+
+.onb-goal-remove:hover,
+.onb-add-goal:hover {
+  color: var(--text);
 }
 
 .onb-field {
@@ -2507,4 +2591,32 @@ a.doc-title:hover {
   .onb-actions .form-btn {
     width: 100%;
   }
+  .onb-goal-control {
+    grid-template-columns: 1fr;
+  }
+  .onb-goal-remove {
+    justify-self: end;
+    padding: 0 2px 4px;
+  }
 }
+
+/* API connections share the app's existing visual language. */
+.connection-card { border: 1px solid var(--border, #444); border-radius: 12px; padding: 20px; margin: 20px 0; }
+.connection-card h2 { margin-top: 0; }
+.connection-card label, #api-plan-overlay label { display: block; margin: 14px 0; font-size: 14px; }
+.connection-card input, .connection-card select, #api-plan-context { display: block; box-sizing: border-box; width: 100%; margin-top: 6px; padding: 10px; border-radius: 6px; border: 1px solid var(--border, #555); background: var(--bg, #181818); color: var(--text, #eee); font: inherit; }
+.connection-note { opacity: .8; font-size: 13px; line-height: 1.6; }
+.connection-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.connection-status { min-height: 20px; font-size: 13px; line-height: 1.5; }
+.api-plan-preview, .api-question { border-left: 3px solid var(--accent, #98c900); padding-left: 12px; line-height: 1.6; }
+.api-plan-source { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; max-height: 260px; overflow-y: auto; }
+#api-plan-overlay .onboarding-panel { max-height: 85vh; overflow-y: auto; }
+
+/* Provider marks are bundled locally; names remain visible in every picker. */
+.provider-logo { width: 24px; height: 24px; flex: 0 0 24px; object-fit: contain; filter: invert(1); }
+[data-theme="light"] .provider-logo { filter: none; }
+.provider-logo-sakana { object-fit: cover; object-position: right; filter: none; }
+.provider-heading, .run-menu-label, .provider-select { display: flex; align-items: center; gap: 10px; }
+.provider-heading .provider-logo { width: 30px; height: 30px; flex-basis: 30px; }
+.provider-select .run-menu-select { flex: 1; min-width: 0; }
+.run-menu-label .provider-logo { width: 20px; height: 20px; flex-basis: 20px; }

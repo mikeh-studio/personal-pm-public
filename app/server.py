@@ -30,11 +30,12 @@ from parser import (
     parse_recent_drive_docs,
     parse_today,
     parse_weekly_focus,
-    project_daily_flow_partition,
+    set_goal_context,
     toggle_task,
     update_feedback,
 )
 from paths import data_dir
+from pm_core.goals import missing_setup_fields
 from token_usage import (
     append_jsonl,
     codex_display_lines,
@@ -47,6 +48,12 @@ from token_usage import (
 )
 
 app = Flask(__name__, static_folder="static")
+
+import api_connections  # noqa: E402
+import security  # noqa: E402
+
+security.install(app)
+api_connections.install(app)
 
 RUN_PROVIDERS = {
     "codex": {
@@ -133,69 +140,14 @@ def _run_selection(body: dict) -> dict:
 
 
 def _run_prompt(provider_label: str, selection: dict) -> str:
-    root = data_dir()
-    selected_label = selection["label"]
-    project_partition = project_daily_flow_partition()
-    eligible_project_names = [p["name"] for p in project_partition["eligible"]]
-    paused_project_names = [p["name"] for p in project_partition["paused"]]
-    closed_project_names = [p["name"] for p in project_partition["closed"]]
-    eligible_projects = ", ".join(eligible_project_names) or "none"
-    paused_projects = ", ".join(paused_project_names) or "none"
-    closed_projects = ", ".join(closed_project_names) or "none"
-    if selection["mode"] == "normal":
-        focus_rule = (
-            '- Treat "Normal planning" as explicit launcher-provided input; do not ask '
-            "the daily-start mode/focus questions."
-        )
-    else:
-        focus_rule = (
-            f'- Treat "{selected_label}" as explicit launcher-provided input; do not ask '
-            "the daily-start mode/focus questions.\n"
-            f"- Bias today toward the selected focus area: {selection['focus']}."
-        )
-
-    rules = "\n".join(
-        [
-            focus_rule,
-            "- Resolve planner files relative to the configured data root, not "
-            "hard-coded private/ paths.",
-            "- Keep public code/package files separate from planner data.",
-            "- Treat `goals/projects.md` rows with `Status` = `Paused` or `Closed` as "
-            "ineligible for daily-flow generation unless the selected focus explicitly "
-            "names that project. Do not create, carry forward, or justify daily tasks "
-            "from paused or closed projects by default.",
-            "- Paused and closed projects are also ineligible when selecting recent-doc "
-            "tasks; a document matched only to paused or closed projects is not a "
-            "project-work reason for today's plan.",
-            "- Keep the workflow local-only. Do not call Google Drive, Google Docs, "
-            "Google Sheets, or external mirror sync helpers.",
-            "- Do not update research or reading-list files unless the user explicitly "
-            "requested research work.",
-            "- If the current plan belongs to a prior date, perform the normal rollover "
-            "into the configured data root before writing the new day.",
-            "- Add compact `| type:... | goal:... | sub:...` metadata to every task line.",
-            "- For carried-forward tasks from prior runs, archive entries, or backlog "
-            "items, add `| backlog:Nd` to show how many calendar days the task has "
-            "remained available and unresolved.",
-            "- If a carried-forward `P1` or `P2` task has missed multiple runs and is "
-            "still broad, rewrite it as a smaller actionable next step instead of "
-            "repeating the broad block.",
-            "- If the current plan is already current and satisfies the workflow, "
-            "prefer verify-only over a cosmetic rewrite.",
-            "- Keep the final response concise and operational.",
-        ]
-    )
-
     return (
-        "Read public/skill/personal-pm/SKILL.md and AGENTS.md, then run today's "
-        "personal-pm workflow using the selected launcher mode.\n\n"
+        "Read public/skill/personal-pm/SKILL.md and AGENTS.md, then follow the daily "
+        "planning workflow linked by that skill.\n\n"
         f"Runner: {provider_label}\n"
-        f"Data root: {root}\n"
-        f"Selected mode: {selection['prompt_mode']}\n"
-        f"Daily-flow eligible projects: {eligible_projects}\n"
-        f"Paused projects excluded unless explicitly selected: {paused_projects}\n"
-        f"Closed projects excluded from daily flow: {closed_projects}\n\n"
-        f"Rules:\n{rules}\n"
+        f"Data root: {data_dir()}\n"
+        f"Explicit user selection: {selection['prompt_mode']}\n"
+        "The user supplied this selection in the UI; use it as the daily-start input. "
+        "Use the skill's shared helpers for rollover and validation."
     )
 
 
@@ -360,7 +312,7 @@ def api_today():
 
 @app.route("/api/goals")
 def api_goals():
-    return jsonify(parse_goals())
+    return jsonify(parse_goals() or {"overall_goals": [], "setup_fields": missing_setup_fields("")})
 
 
 @app.route("/api/projects")
@@ -733,17 +685,40 @@ def _onboarding_provider(body):
     return onboarding.normalize_provider(body.get("provider", onboarding.DEFAULT_PROVIDER))
 
 
+def _onboarding_goals_ready():
+    goals = parse_goals() or {}
+    return bool(goals.get("overall_goals"))
+
+
+@app.route("/api/onboarding/goals", methods=["POST"])
+def api_onboarding_goals():
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "Expected goal setup fields."}), 400
+    goals = body.get("goals", [])
+    if not isinstance(goals, list):
+        return jsonify({"ok": False, "error": "Goals must be a list."}), 400
+    non_empty_goals = [goal for goal in goals if str(goal or "").strip()]
+    if len(non_empty_goals) > 12:
+        return jsonify({"ok": False, "error": "Keep the goal list to 12 items or fewer."}), 400
+    ok, error = set_goal_context(non_empty_goals, body.get("context"))
+    if not ok:
+        return jsonify({"ok": False, "error": error or "Could not save goals."}), 400
+    return jsonify({"ok": True, "goals": parse_goals()})
+
+
 @app.route("/api/onboarding/questions", methods=["POST"])
 def api_onboarding_questions():
     body = request.get_json(silent=True) or {}
     week_of = current_week_of()
-    need_goals = bool(body.get("need_goals", False))
+    if not _onboarding_goals_ready():
+        return jsonify({"ok": False, "error": "Review and save at least one goal first."}), 409
     try:
         provider = _onboarding_provider(body)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     try:
-        questions = onboarding.generate_questions(week_of, need_goals=need_goals, provider=provider)
+        questions = onboarding.generate_questions(week_of, provider=provider)
     except (FileNotFoundError, TimeoutError, ValueError, RuntimeError) as e:
         return jsonify({"ok": False, "error": str(e)}), 502
     return jsonify({"ok": True, "week_of": week_of, "provider": provider, "questions": questions})
@@ -753,18 +728,22 @@ def api_onboarding_questions():
 def api_onboarding_generate():
     body = request.get_json(silent=True) or {}
     week_of = current_week_of()
-    need_goals = bool(body.get("need_goals", False))
+    if not _onboarding_goals_ready():
+        return jsonify({"ok": False, "error": "Review and save at least one goal first."}), 409
     answers = body.get("answers", [])
     if not isinstance(answers, list) or not answers:
         return jsonify({"ok": False, "error": "Answers are required."}), 400
+    answered = [
+        item for item in answers if isinstance(item, dict) and str(item.get("answer", "")).strip()
+    ]
+    if len(answered) < 4:
+        return jsonify({"ok": False, "error": "Answer at least four weekly setup questions."}), 400
     try:
         provider = _onboarding_provider(body)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     try:
-        result = onboarding.generate_focus(
-            week_of, answers, need_goals=need_goals, provider=provider
-        )
+        result = onboarding.generate_focus(week_of, answered, provider=provider)
     except (FileNotFoundError, TimeoutError, ValueError, RuntimeError) as e:
         return jsonify({"ok": False, "error": str(e)}), 502
     return jsonify({"ok": True, "week_of": week_of, "provider": provider, **result})

@@ -8,6 +8,8 @@ import sys
 from datetime import date
 from pathlib import Path
 
+from pm_core.taxonomy import load as load_taxonomy
+
 TASK_TYPES = {
     "interview_prep",
     "project_work",
@@ -17,18 +19,6 @@ TASK_TYPES = {
     "design_exploration",
 }
 
-GOALS = {"data_owner", "experience_design"}
-
-SUB_CATEGORIES = {
-    "decision_science",
-    "data_foundation",
-    "evaluation_discipline",
-    "service_platform_eng",
-    "website",
-    "writing",
-    "physical_ai",
-    "career_assets",
-}
 
 BACKLOG_RE = re.compile(r"^[1-9]\d*d$")
 
@@ -154,7 +144,11 @@ def load_goal_tied_recent_docs(data_dir: Path):
     for doc in docs:
         if not isinstance(doc, dict):
             continue
-        matched_goals = [goal for goal in string_list(doc.get("matched_goals")) if goal in GOALS]
+        matched_goals = [
+            goal
+            for goal in string_list(doc.get("matched_goals"))
+            if goal in load_taxonomy(data_dir)["goals"]
+        ]
         if not matched_goals:
             continue
         candidates.append(
@@ -185,7 +179,8 @@ def lane_key(main_text: str) -> str:
     return ""
 
 
-def validate_task_line(line: str, index: int, allow_planner_maintenance: bool):
+def validate_task_line(line: str, index: int, allow_planner_maintenance: bool, taxonomy=None):
+    taxonomy = taxonomy or load_taxonomy()
     errors = []
     match = TASK_LINE_RE.match(line.strip())
     if not match:
@@ -207,11 +202,11 @@ def validate_task_line(line: str, index: int, allow_planner_maintenance: bool):
         errors.append(f"Task {index}: invalid type '{task_type}'")
 
     goal = metadata.get("goal")
-    if goal and goal not in GOALS:
+    if goal and goal not in taxonomy["goals"]:
         errors.append(f"Task {index}: invalid goal '{goal}'")
 
     sub = metadata.get("sub")
-    if sub and sub not in SUB_CATEGORIES:
+    if sub and sub not in taxonomy["sub_categories"]:
         errors.append(f"Task {index}: invalid sub '{sub}'")
 
     backlog = metadata.get("backlog")
@@ -220,14 +215,12 @@ def validate_task_line(line: str, index: int, allow_planner_maintenance: bool):
             errors.append(
                 f"Task {index}: invalid backlog '{backlog}' (expected Nd, for example 4d)"
             )
-        else:
-            backlog_days = int(backlog[:-1])
-            duration = match.group("duration") or match.group("duration_plain") or ""
-            duration_minutes = int(duration) if duration else 0
-            if priority in {"P1", "P2"} and backlog_days >= 2 and duration_minutes > 60:
-                errors.append(
-                    f"Task {index}: repeated high-priority backlog task is still over 60m; split it into a smaller actionable step"
-                )
+
+    outcome = metadata.get("outcome")
+    if outcome and outcome not in {"incomplete", "blocked", "unknown"}:
+        errors.append(
+            f"Task {index}: invalid outcome '{outcome}' (use incomplete, blocked, or unknown; completion uses the checkbox)"
+        )
 
     if not allow_planner_maintenance:
         normalized_main = main_text.lower()
@@ -297,6 +290,11 @@ def validate(
     elif check_date and plan_date != current_date:
         errors.append(f"Plan date is {plan_date}, expected {current_date}")
 
+    try:
+        taxonomy = load_taxonomy(infer_data_dir(path))
+    except (ValueError, OSError) as exc:
+        return [str(exc)]
+
     tasks = extract_tasks_section(lines)
     if len(tasks) < min_task_count or len(tasks) > task_count:
         if min_task_count == task_count:
@@ -309,7 +307,7 @@ def validate(
     lanes = {}
     task_records = []
     for index, line in enumerate(tasks, start=1):
-        errors.extend(validate_task_line(line, index, allow_planner_maintenance))
+        errors.extend(validate_task_line(line, index, allow_planner_maintenance, taxonomy))
         match = TASK_LINE_RE.match(line.strip())
         if not match:
             continue

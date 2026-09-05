@@ -4,19 +4,22 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Personal PM</title>
-  <link rel="stylesheet" href="/static/style.css?v=1.6.0">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="/static/style.css?v=1.9.0">
+  <link rel="stylesheet" href="/static/theme.css?v=1.9.0">
+  <script src="/static/vendor/chart.umd.min.js"></script>
 </head>
 <body>
   <div class="app-shell">
+    <header class="workspace-header">Personal PM</header>
     <nav class="tab-bar">
-      <button class="tab active" data-tab="today" onclick="switchTab('today')">Today</button>
+      <button class="tab active" data-tab="today" aria-current="page" onclick="switchTab('today')">Today</button>
       <button class="tab" data-tab="projects" onclick="switchTab('projects')">Projects</button>
-      <button class="tab" data-tab="weekly" onclick="switchTab('weekly')">Weekly Focus</button>
+      <button class="tab" data-tab="weekly" onclick="switchTab('weekly')">Weekly</button>
       <button class="tab" data-tab="analytics" onclick="switchTab('analytics')">Analytics</button>
-      <button class="tab" data-tab="docs" onclick="switchTab('docs')">Docs</button>
+      <button class="tab" data-tab="connections" onclick="switchTab('connections')">Setting</button>
       <button class="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode" aria-label="Toggle light/dark mode" id="theme-btn"></button>
     </nav>
+    <nav id="setting-sections" class="setting-sections hidden" aria-label="Setting sections"><button data-section="connections" onclick="switchTab('connections')">API connections</button><button data-section="docs" onclick="switchTab('docs')">Documents</button></nav>
     <div class="tab-content" id="tab-today">
       <div class="app" id="app">
         <div class="loading">Loading today's plan...</div>
@@ -42,8 +45,10 @@
         <div class="loading">Loading recent docs...</div>
       </div>
     </div>
+    <div class="tab-content hidden" id="tab-connections"><div class="app" id="connections"><div class="loading">Loading connections...</div></div></div>
   </div>
   <div class="toast-container" id="toast-container" role="status" aria-live="polite" aria-atomic="false"></div>
-  <script src="/static/app.js?v=1.6.0"></script>
+  <script src="/static/app.js?v=1.9.0"></script>
+  <script src="/static/connections.js?v=1.9.0"></script>
 </body>
 </html>

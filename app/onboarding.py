@@ -1,5 +1,5 @@
 """First-run onboarding: use a local agent CLI to draft weekly-focus questions and
-synthesize a weekly focus (and overall goals when missing) from the user's answers.
+synthesize a weekly focus from the user's answers after goals are managed explicitly.
 
 The same runners as "Run Today's Flow" are supported (Codex, Claude Code, Gemini CLI).
 Each CLI is run read-only and asked to return only JSON — it never edits files. The
@@ -11,14 +11,7 @@ import os
 import shutil
 import subprocess
 
-from parser import (
-    add_weekly_focus,
-    ensure_weekly_focus_file,
-    parse_goals,
-    parse_projects,
-    parse_weekly_focus,
-    set_overall_goals,
-)
+from parser import parse_goals  # noqa: F401 — compatibility for existing callers
 from paths import REPO_ROOT
 
 # Mirror server.RUN_PROVIDERS so onboarding offers the same runners as the daily flow.
@@ -36,6 +29,11 @@ CLI_TIMEOUT = 120
 
 def normalize_provider(provider_key):
     key = str(provider_key or "").strip().lower() or DEFAULT_PROVIDER
+    if key.startswith("api:"):
+        from pm_core.connections import provider
+
+        provider(key[4:])
+        return key
     if key not in PROVIDERS:
         raise ValueError(f"Unsupported runner: {provider_key}")
     return key
@@ -216,6 +214,10 @@ def _extract_json(provider_key, stdout):
 
 def _run_provider_json(provider_key, prompt):
     provider_key = normalize_provider(provider_key)
+    if provider_key.startswith("api:"):
+        from pm_core.api_provider import generate_json
+
+        return generate_json(provider_key[4:], prompt, "weekly_setup")
     executable = _resolve_bin(provider_key)
     model = os.environ.get("PERSONAL_PM_ONBOARDING_MODEL", "").strip()
     command = _build_command(provider_key, executable, prompt, model)
@@ -247,158 +249,24 @@ def _run_provider_json(provider_key, prompt):
     return obj
 
 
-# ── Context + prompts ──
-
-
-def build_planner_context():
-    goals = parse_goals() or {}
-    overall = goals.get("overall_goals") or []
-    disciplines = [d.get("name", "") for d in goals.get("disciplines", []) if d.get("name")]
-
-    projects = parse_projects() or []
-    active = [p for p in projects if p.get("status") not in {"Paused", "Closed"}]
-    project_lines = []
-    for p in active[:8]:
-        line = f"- {p.get('name', '')} ({p.get('priority', '')}/{p.get('status', '')})"
-        if p.get("next_action"):
-            line += f" next: {p['next_action']}"
-        project_lines.append(line)
-
-    weekly = parse_weekly_focus() or {}
-    last_priorities = [
-        item.get("text", "") for item in (weekly.get("priority_items") or []) if item.get("text")
-    ]
-
-    parts = ["Overall goals:\n" + ("\n".join(f"- {g}" for g in overall) or "- (none set yet)")]
-    if disciplines:
-        parts.append("Key disciplines: " + ", ".join(disciplines))
-    parts.append("Active projects:\n" + ("\n".join(project_lines) or "- (none)"))
-    if last_priorities:
-        parts.append(
-            f"Most recent weekly priorities (week of {weekly.get('week_of', '?')}):\n"
-            + "\n".join(f"- {t}" for t in last_priorities)
-        )
-    return "\n\n".join(parts)
-
-
-def _clean_questions(raw):
-    cleaned = []
-    for idx, q in enumerate(raw or []):
-        if not isinstance(q, dict):
-            continue
-        label = str(q.get("label", "")).strip()
-        if not label:
-            continue
-        cleaned.append(
-            {
-                "id": (str(q.get("id") or "").strip() or f"q{idx + 1}"),
-                "label": label[:300],
-                "help": str(q.get("help", "")).strip()[:300],
-                "placeholder": str(q.get("placeholder", "")).strip()[:200],
-            }
-        )
-        if len(cleaned) >= 5:
-            break
-    return cleaned
-
-
-_QUESTIONS_SHAPE = (
-    '{"questions":[{"id":"snake_case","label":"the question",'
-    '"help":"optional one line","placeholder":"optional example answer"}]}'
+# Shared weekly policy, context, and writers live with the skill.
+from pm_core.weekly import (  # noqa: E402, F401
+    _clean_questions,
+    build_planner_context,
+    focus_prompt,
+    questions_prompt,
+    save_weekly,
 )
 
 
-def generate_questions(week_of, need_goals=False, provider=DEFAULT_PROVIDER):
-    context = build_planner_context()
-    goal_clause = (
-        "The user has not set overall goals yet, so include 1-2 questions about their "
-        "longer-term direction in addition to this week.\n"
-        if need_goals
-        else "Overall goals are already set; focus the questions on THIS week only.\n"
-    )
-    prompt = (
-        "You are a focused personal planning coach helping the user set their weekly "
-        f"focus for the week of {week_of}.\n\n"
-        f"Context about the user:\n{context}\n\n"
-        f"{goal_clause}"
-        "Write 3 to 5 short, specific questions whose answers let you draft a strong, "
-        "concrete weekly focus of 2-4 priorities. Prefer questions about fixed "
-        "commitments and deadlines, the single most important outcome this week, time "
-        "and energy available, and likely blockers. Avoid generic or yes/no questions.\n\n"
-        "Return ONLY a JSON object (no prose, no markdown fences) of exactly this shape:\n"
-        f"{_QUESTIONS_SHAPE}\n"
-        "Use a snake_case id per question; help and placeholder may be empty strings."
-    )
-    payload = _run_provider_json(provider, prompt)
+def generate_questions(week_of, provider=DEFAULT_PROVIDER):
+    payload = _run_provider_json(provider, questions_prompt(week_of))
     questions = _clean_questions(payload.get("questions"))
-    if not questions:
-        raise ValueError("The assistant did not return any questions.")
+    if len(questions) < 6:
+        raise ValueError("The assistant did not return the required 6 to 8 questions.")
     return questions
 
 
-def _format_answers(answers):
-    lines = []
-    for item in answers or []:
-        if isinstance(item, dict):
-            label = str(item.get("label") or item.get("question") or item.get("id") or "").strip()
-            answer = str(item.get("answer", "")).strip()
-        else:
-            label, answer = "", str(item).strip()
-        if not answer:
-            continue
-        lines.append(f"Q: {label}\nA: {answer}" if label else f"A: {answer}")
-    return "\n\n".join(lines)
-
-
-_FOCUS_SHAPE = (
-    '{"overall_goals":["..."],'
-    '"weekly":{"why":"one sentence","priorities":["...","..."],"notes":"optional"}}'
-)
-
-
-def generate_focus(week_of, answers, need_goals=False, provider=DEFAULT_PROVIDER):
-    context = build_planner_context()
-    qa = _format_answers(answers)
-    if not qa:
-        raise ValueError("No answers were provided.")
-
-    goal_clause = (
-        "Propose 2-3 concise overall goals (longer-term direction) grounded in the answers "
-        "in 'overall_goals'.\n"
-        if need_goals
-        else "Leave 'overall_goals' as an empty array; only produce the weekly focus.\n"
-    )
-    prompt = (
-        "You are a personal planning coach. Using the user's context and answers, draft a "
-        f"concrete weekly focus for the week of {week_of}.\n\n"
-        f"User context:\n{context}\n\n"
-        f"User answers:\n{qa}\n\n"
-        f"{goal_clause}"
-        "Weekly focus rules: 'why' is one sentence on the theme; 'priorities' is 2 to 4 "
-        "specific, outcome-oriented items naming the concrete result and, where natural, the "
-        "discipline or project, e.g. 'Ship X - Discipline / Project'; 'notes' is an optional "
-        "short carry-over or constraint (may be empty). Stay grounded in the answers; do not "
-        "invent commitments.\n\n"
-        "Return ONLY a JSON object (no prose, no markdown fences) of exactly this shape:\n"
-        f"{_FOCUS_SHAPE}"
-    )
-    payload = _run_provider_json(provider, prompt)
-
-    weekly = payload.get("weekly") or {}
-    why = str(weekly.get("why", "")).strip()
-    priorities = [str(p).strip() for p in (weekly.get("priorities") or []) if str(p).strip()]
-    notes = str(weekly.get("notes", "")).strip()
-    if not priorities:
-        raise ValueError("The assistant did not return any weekly priorities.")
-
-    if need_goals:
-        overall = payload.get("overall_goals") or []
-        ok, _ = set_overall_goals(overall)
-        # If goals could not be set we still proceed; the weekly focus is the priority.
-
-    ensure_weekly_focus_file()
-    ok, error = add_weekly_focus(week_of, why=why, priorities=priorities, notes=notes)
-    if not ok and "already exists" not in (error or "").lower():
-        raise ValueError(error or "Could not save the weekly focus.")
-
-    return {"weekly": parse_weekly_focus(), "goals": parse_goals()}
+def generate_focus(week_of, answers, provider=DEFAULT_PROVIDER):
+    payload = _run_provider_json(provider, focus_prompt(week_of, answers))
+    return save_weekly(week_of, payload)

@@ -30,18 +30,6 @@ TASK_TYPES = {
     "design_exploration",
 }
 
-GOALS = {"data_owner", "experience_design"}
-
-SUB_CATEGORIES = {
-    "decision_science",
-    "data_foundation",
-    "evaluation_discipline",
-    "service_platform_eng",
-    "website",
-    "writing",
-    "physical_ai",
-    "career_assets",
-}
 
 CANCELED_STATUSES = {"cancel", "canceled", "cancelled"}
 DELETED_STATUSES = {"delete", "deleted", "removed"}
@@ -101,7 +89,7 @@ def normalize_goal(value: str) -> str:
         "design": "experience_design",
     }
     token = aliases.get(normalize_token(value), normalize_token(value))
-    if token not in GOALS:
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", token):
         raise ValueError(f"Unsupported goal: {value}")
     return token
 
@@ -122,7 +110,7 @@ def normalize_sub_category(value: str) -> str:
         "career_assets": "career_assets",
     }
     token = aliases.get(normalize_token(value), normalize_token(value))
-    if token not in SUB_CATEGORIES:
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", token):
         raise ValueError(f"Unsupported sub_category: {value}")
     return token
 
@@ -315,12 +303,20 @@ def parse_task_line(line: str, date: str, source: str):
         else infer_task_type(task_text, project)
     )
     sub_category = (
-        normalize_sub_category(metadata["sub"])
+        (
+            metadata["sub"]
+            if re.fullmatch(r"[a-z][a-z0-9_]*", metadata["sub"])
+            else normalize_sub_category(metadata["sub"])
+        )
         if "sub" in metadata
         else infer_sub_category(task_text, project, task_type)
     )
     goal = (
-        normalize_goal(metadata["goal"])
+        (
+            metadata["goal"]
+            if re.fullmatch(r"[a-z][a-z0-9_]*", metadata["goal"])
+            else normalize_goal(metadata["goal"])
+        )
         if "goal" in metadata
         else infer_goal(project, sub_category)
     )

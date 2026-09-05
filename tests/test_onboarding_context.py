@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 APP_ROOT = REPO_ROOT / "app"
@@ -61,6 +62,49 @@ class OnboardingContextTests(unittest.TestCase):
         self.assertIn("Idea next", context)
         self.assertNotIn("Paused now", context)
         self.assertNotIn("Closed now", context)
+
+    def test_generate_questions_requires_six_and_caps_at_eight(self):
+        payload = {
+            "questions": [
+                {"id": f"q{i}", "label": f"Question {i}", "help": "", "placeholder": ""}
+                for i in range(1, 10)
+            ]
+        }
+        with patch.object(pm_onboarding, "_run_provider_json", return_value=payload):
+            questions = pm_onboarding.generate_questions("2026-06-22")
+
+        self.assertEqual(len(questions), 8)
+        self.assertTrue(all(question["help"] for question in questions))
+        self.assertTrue(all(question["placeholder"] for question in questions))
+
+    def test_generate_questions_rejects_too_few(self):
+        payload = {
+            "questions": [
+                {"id": f"q{i}", "label": f"Question {i}", "help": "", "placeholder": ""}
+                for i in range(1, 6)
+            ]
+        }
+        with patch.object(pm_onboarding, "_run_provider_json", return_value=payload):
+            with self.assertRaisesRegex(ValueError, "required 6 to 8"):
+                pm_onboarding.generate_questions("2026-06-22")
+
+    def test_generate_focus_does_not_replace_managed_goals(self):
+        payload = {
+            "overall_goals": ["Assistant should not overwrite this"],
+            "weekly": {
+                "why": "Ship the smallest useful slice.",
+                "priorities": ["Finish one reviewable slice"],
+                "notes": "Keep scope tight.",
+            },
+        }
+        with patch.object(pm_onboarding, "_run_provider_json", return_value=payload):
+            pm_onboarding.generate_focus(
+                "2026-06-22",
+                [{"label": "Outcome", "answer": "Finish one reviewable slice"}],
+            )
+
+        goals = pm_onboarding.parse_goals()
+        self.assertEqual(goals["overall_goals"], ["Build good systems"])
 
 
 if __name__ == "__main__":

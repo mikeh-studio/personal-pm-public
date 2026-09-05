@@ -14,6 +14,11 @@ VALIDATE_TODAY_PATH = (
     REPO_ROOT / "public" / "skill" / "personal-pm" / "scripts" / "validate_today.py"
 )
 
+sys.path.insert(0, str(VALIDATE_TODAY_PATH.parent))
+
+from pm_core.goals import validate_goal_file  # noqa: E402
+from pm_core.taxonomy import load as load_taxonomy  # noqa: E402
+
 REQUIRED_FILES = [
     "goals/goal.md",
     "goals/projects.md",
@@ -49,13 +54,6 @@ GITHUB_SYNC_BLOCKED_CONFIG_KEYS = {
     "token",
 }
 
-REQUIRED_GOAL_SECTIONS = [
-    "Overall Goals",
-    "Current Near-Term Deadlines",
-    "Key Disciplines",
-    "Suggested Daily Practice",
-]
-
 LEDGER_FIELDS = [
     "date",
     "task_text",
@@ -69,10 +67,6 @@ LEDGER_FIELDS = [
     "source",
     "source_date",
 ]
-
-PLACEHOLDER_RE = re.compile(
-    r"^(tbd|todo|placeholder|none|n/a|na|\[.*\]|\{\{.*\}\})$", re.IGNORECASE
-)
 
 
 def resolve_data_dir(value: str | None = None) -> Path:
@@ -94,40 +88,6 @@ def load_validate_today():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-def section_body(text: str, heading: str) -> str:
-    pattern = re.compile(
-        rf"^##\s+{re.escape(heading)}\s*$\n(.*?)(?=^##\s+|\Z)", re.MULTILINE | re.DOTALL
-    )
-    match = pattern.search(text)
-    return match.group(1).strip() if match else ""
-
-
-def has_meaningful_content(body: str) -> bool:
-    for line in body.splitlines():
-        cleaned = line.strip()
-        if not cleaned:
-            continue
-        if cleaned.startswith("|") and ("---" in cleaned or "Discipline Area" in cleaned):
-            continue
-        cleaned = cleaned.strip("-*`#>| ")
-        cleaned = re.sub(r"\s+", " ", cleaned).strip()
-        if cleaned and not PLACEHOLDER_RE.match(cleaned):
-            return True
-    return False
-
-
-def validate_goal_file(path: Path) -> list[str]:
-    errors = []
-    text = path.read_text(encoding="utf-8")
-    for heading in REQUIRED_GOAL_SECTIONS:
-        body = section_body(text, heading)
-        if not body:
-            errors.append(f"goals/goal.md: missing section '{heading}'")
-        elif not has_meaningful_content(body):
-            errors.append(f"goals/goal.md: section '{heading}' is placeholder-only")
-    return errors
 
 
 def validate_ledger(path: Path) -> list[str]:
@@ -266,9 +226,7 @@ def validate_github_sync_config(path: Path) -> list[str]:
             or "token" in normalized
             or "secret" in normalized
         ):
-            errors.append(
-                f"config/github_sync.json: key '{key}' is not allowed; keep auth in gh"
-            )
+            errors.append(f"config/github_sync.json: key '{key}' is not allowed; keep auth in gh")
         elif normalized not in GITHUB_SYNC_ALLOWED_CONFIG_KEYS:
             allowed = ", ".join(sorted(GITHUB_SYNC_ALLOWED_CONFIG_KEYS))
             errors.append(
@@ -329,6 +287,11 @@ def validate_workspace(
             errors.append(f"Missing required file: {relative_path}")
         elif not path.is_file():
             errors.append(f"Expected file but found non-file path: {relative_path}")
+
+    try:
+        load_taxonomy(data_dir)
+    except (ValueError, OSError) as exc:
+        errors.append(str(exc))
 
     goal_path = data_dir / "goals" / "goal.md"
     if goal_path.exists() and not template_mode:

@@ -17,7 +17,7 @@ Append prior-day history to `DATA_DIR/tasks/archive/log.md` in this shape:
 - Completed:
 - Deleted / canceled:
 - Incomplete / carry-forward:
-- Completion rate:
+- Reported outcomes / unknown outcomes:
 - Carry-forward:
 - Constraint / feedback:
 - Planning signal:
@@ -25,7 +25,7 @@ Append prior-day history to `DATA_DIR/tasks/archive/log.md` in this shape:
 
 Rules:
 - Preserve the final checkbox state exactly.
-- Treat unchecked tasks under `Final Tasks` as incomplete, not canceled.
+- Keep unchecked tasks open in the archive. Their real outcome is unknown unless `outcome:incomplete` or `outcome:blocked` records an explicit report; do not infer a missed day from an empty checkbox.
 - Use `status:canceled`, `status:cancelled`, `status:deleted`, or the `Deleted / Canceled Tasks` section only when a task was intentionally removed from the plan or marked skipped-but-not-carry in the UI.
 - Keep completed tasks separate from deleted/canceled tasks in planning notes and generated memory.
 - Condense repeated carry-forward, heads-up, and feedback text into short planning notes instead of copying every section verbatim.
