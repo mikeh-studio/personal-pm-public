@@ -168,16 +168,8 @@ def append_section(path, day, section):
     return write(path, text.rstrip() + "\n\n" + section.rstrip() + "\n")
 
 
-def rollover(target_date):
-    target = date.fromisoformat(target_date)
-    plan = store.parse_today()
-    if not plan or not plan["date"]:
-        raise ValueError("No dated plan to roll over.")
-    previous = date.fromisoformat(plan["date"])
-    if previous == target:
-        return {"changed": False, "reason": "Plan is already current."}
-    if previous > target:
-        raise ValueError("Cannot roll a future plan backward.")
+def _rollover_archive(plan):
+    """Prepare and validate the next archive state without writing it."""
     entry = archive_entry(plan)
     archive = data_path("tasks", "archive", "log.md")
     archive_text = read(archive)
@@ -194,6 +186,34 @@ def rollover(target_date):
         for task in next(day for day in days if day.day == plan["date"]).completed
     ]
     rows = [row for row in rows if row]
+    return combined, days, rows
+
+
+def planning_days():
+    """Include the day about to roll over when validating the next plan's scope."""
+    plan = store.parse_today()
+    if plan and plan["date"] and plan["tasks"]:
+        previous = date.fromisoformat(plan["date"])
+        target = date.fromisoformat(validator.expected_date())
+        if previous > target:
+            raise ValueError("Cannot overwrite a future plan.")
+        if previous < target:
+            return _rollover_archive(plan)[1]
+    return outcomes.parse_archive(read(data_path("tasks", "archive", "log.md")))
+
+
+def rollover(target_date):
+    target = date.fromisoformat(target_date)
+    plan = store.parse_today()
+    if not plan or not plan["date"]:
+        raise ValueError("No dated plan to roll over.")
+    previous = date.fromisoformat(plan["date"])
+    if previous == target:
+        return {"changed": False, "reason": "Plan is already current."}
+    if previous > target:
+        raise ValueError("Cannot roll a future plan backward.")
+    combined, days, rows = _rollover_archive(plan)
+    archive = data_path("tasks", "archive", "log.md")
     changed = write(archive, combined)
     added = ledger.append_rows(data_path("data", "task_log.csv"), rows)
     write(data_path("context", "planning-insights.md"), outcomes.build_planning_insights(days, 14))
@@ -289,8 +309,8 @@ def save_plan(source: Path, replace=False, focus="", validate_only=False):
                 raise ValueError(
                     f"Project {project['name']} is {project['status']} and ineligible for this plan."
                 )
-    days = outcomes.parse_archive(read(data_path("tasks", "archive", "log.md")))
-    rule, cap, minutes = outcomes.adaptive_rule(days)
+    days = planning_days()
+    rule, cap, minutes = outcomes.adaptive_rule(days, validator.expected_date())
     total = sum(task.duration_minutes for task in active)
     if outcomes.recent_reported_zero(days, validator.expected_date()):
         repeated = outcomes.consecutive_zero_completion_days(days) >= 2

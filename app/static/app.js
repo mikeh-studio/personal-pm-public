@@ -196,7 +196,8 @@ function needsOnboarding() {
   const weekOf = defaultWeekOf();
   const weeks = (state.weekly && state.weekly.weeks) || [];
   const hasWeekly = weeks.some((w) => w.week_of === weekOf);
-  return { need: !hasWeekly || !hasGoals, weekOf, needWeekly: !hasWeekly };
+  const missingContext = !!state.goals?.setup_fields?.length;
+  return { need: !hasWeekly || !hasGoals || missingContext, weekOf, needWeekly: !hasWeekly };
 }
 
 function maybeStartOnboarding() {
@@ -215,6 +216,8 @@ function openOnboarding(weekOf, needWeekly = true) {
     needWeekly,
     provider: "codex",
     goalDraft: currentGoals.length ? currentGoals : [""],
+    setupFields: (state.goals?.setup_fields || []).slice(),
+    contextDraft: Object.fromEntries((state.goals?.setup_fields || []).map(field => [field.key, ''])),
     questions: [],
     answers: {},
     error: "",
@@ -251,6 +254,10 @@ function _captureOnboardingGoals() {
     const el = $(`#onb-goal-${i}`);
     return el ? el.value : goal;
   });
+  for (const field of _onboardingState.setupFields) {
+    const el = $(`#onb-context-${field.key}`);
+    if (el) _onboardingState.contextDraft[field.key] = el.value;
+  }
 }
 
 function addOnboardingGoal() {
@@ -285,12 +292,19 @@ function saveOnboardingGoals() {
     renderOnboarding();
     return;
   }
+  for (const field of _onboardingState.setupFields) {
+    if (!_onboardingState.contextDraft[field.key]?.trim()) {
+      _onboardingState.error = `Add ${field.label.toLowerCase()} before continuing.`;
+      renderOnboarding();
+      return;
+    }
+  }
 
   _onboardingState.step = "saving-goals";
   _onboardingState.error = "";
   renderOnboarding();
 
-  _onboardingFetch("/api/onboarding/goals", { goals })
+  _onboardingFetch("/api/onboarding/goals", { goals, context: _onboardingState.contextDraft })
     .then(async (data) => {
       if (!_onboardingState) return;
       state.goals = data.goals;
@@ -434,7 +448,7 @@ function _onboardingBody() {
     return `
       <div class="onb-kicker">Weekly setup · Step 1 of 2</div>
       <h2 class="onb-title">Review your goals before choosing this week’s work</h2>
-      <p class="onb-lead">These goals are your guardrails. Add, edit, or remove them now; other sections in your local goal file stay unchanged.</p>
+      <p class="onb-lead">Review your goals and fill in any missing planning context. Existing context stays as saved.</p>
       ${errorHtml}
       <div class="onb-goals">
         ${(s.goalDraft || [])
@@ -451,6 +465,12 @@ function _onboardingBody() {
           .join("")}
       </div>
       <button type="button" class="onb-add-goal" onclick="addOnboardingGoal()">+ Add another goal</button>
+      ${s.setupFields.length ? `<div class="onb-fields">${s.setupFields.map(field => `
+        <label class="onb-field" for="onb-context-${esc(field.key)}">
+          <span class="onb-q-label">${esc(field.label)}</span>
+          <span class="onb-q-help">${esc(field.help)}</span>
+          <textarea class="task-form-input" id="onb-context-${esc(field.key)}" rows="3" maxlength="4000">${esc(s.contextDraft[field.key] || '')}</textarea>
+        </label>`).join('')}</div>` : ''}
       <div class="onb-actions">
         <button type="button" class="form-btn form-btn-secondary" onclick="dismissOnboarding()">Skip for now</button>
         <button type="button" class="form-btn form-btn-primary" onclick="saveOnboardingGoals()">Save goals and continue</button>

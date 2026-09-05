@@ -54,6 +54,7 @@ def draft_plan(key, mode, focus, user_context):
         raise ValueError("Review and complete the saved goals before drafting a plan.")
     source_version = fingerprint()
     day = validate_today.expected_date()
+    adaptive_rule = workflow.outcomes.adaptive_rule(workflow.planning_days(), day)
     references = "\n\n".join(
         (SKILL_DIR / "references" / name).read_text()
         for name in ("daily-planning.md", "today-template.md", "metadata.md")
@@ -66,7 +67,7 @@ def draft_plan(key, mode, focus, user_context):
         "planning_context": state["planning_context"],
         "latest_outcomes": state["latest_outcomes"],
         "taxonomy": state["taxonomy"],
-        "adaptive_rule": state["adaptive_rule"],
+        "adaptive_rule": adaptive_rule,
         "today": (state["today"] or {}).get("raw", ""),
         "backlog": workflow.read(data_path("tasks", "backlog.md"))[:6000],
         "recent_work": workflow.read(data_path("context", "daily-report.md"))[-10000:],
@@ -109,17 +110,19 @@ def draft_plan(key, mode, focus, user_context):
         workflow.save_plan(path, focus=focus, validate_only=True)
     current = state["today"] or {}
     if current.get("date") == day:
-        for line in current.get("raw", "").splitlines():
+        draft_tasks = validate_today.extract_tasks_section(markdown.splitlines())
+        for line in validate_today.extract_tasks_section(current.get("raw", "").splitlines()):
             if line.startswith("- [") and (
                 line.startswith(("- [x]", "- [X]"))
                 or any(f"status:{s}" in line for s in ("canceled", "cancelled", "deleted"))
             ):
-                if line not in markdown.splitlines():
+                if line not in draft_tasks:
                     raise ValueError(
                         "Draft omitted previously completed or canceled work. Nothing was saved."
                     )
-        for value in current.get("feedback", {}).values():
-            if value and value not in markdown:
+        draft_feedback = workflow.store.parse_today_text(markdown)["feedback"]
+        for field, value in current.get("feedback", {}).items():
+            if value and draft_feedback.get(field) != value:
                 raise ValueError("Draft omitted existing feedback. Nothing was saved.")
     with _LOCK:
         now = time.monotonic()
@@ -156,7 +159,12 @@ def apply_draft(token):
             path.write_text(draft["markdown"])
             workflow.save_plan(path, focus=draft["focus"], validate_only=True)
             current = workflow.store.parse_today()
-            if current and current.get("date") and current["date"] != draft["day"]:
+            if (
+                current
+                and current.get("date")
+                and current["tasks"]
+                and current["date"] != draft["day"]
+            ):
                 workflow.rollover(draft["day"])
             result = workflow.save_plan(path, replace=True, focus=draft["focus"])
         del _DRAFTS[token]

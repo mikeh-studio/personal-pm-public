@@ -61,6 +61,49 @@ class OnboardingApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("12 items or fewer", response.get_json()["error"])
 
+    def test_goal_context_is_validated_before_any_section_is_changed(self):
+        root = Path(self.tmp.name)
+        path = root / "goals/goal.md"
+        path.parent.mkdir()
+        original = (REPO_ROOT / "templates/goals/goal.md").read_text()
+        path.write_text(original)
+        for context in (
+            {},
+            {"deadlines": "No fixed deadlines"},
+            {"disciplines": ["Invalid shape"]},
+            {"unknown": "Unsupported field"},
+        ):
+            with self.subTest(context=context):
+                response = self.client.post(
+                    "/api/onboarding/goals", json={"goals": ["New goal"], "context": context}
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(path.read_text(), original)
+
+    def test_setup_only_collects_missing_context_and_preserves_saved_sections(self):
+        path = Path(self.tmp.name) / "goals/goal.md"
+        path.parent.mkdir()
+        saved = "## Current Near-Term Deadlines\n* Review on Friday\n\n## Key Disciplines\n| Discipline Area | Why It Matters |\n| --- | --- |\n| Writing | Share useful ideas |\n\n## Personal Notes\nKeep this section verbatim.\n"
+        path.write_text("## Overall Goals\n* Old goal\n\n" + saved)
+        fields = self.client.get("/api/goals").get_json()["setup_fields"]
+        self.assertEqual([field["key"] for field in fields], ["daily_practice"])
+        response = self.client.post(
+            "/api/onboarding/goals",
+            json={
+                "goals": ["Write clearly"],
+                "context": {"daily_practice": "One paragraph in 15 minutes"},
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(response.get_json()["goals"]["setup_fields"], [])
+        self.assertIn(saved, path.read_text())
+
+    def test_empty_workspace_exposes_all_missing_setup_fields(self):
+        fields = self.client.get("/api/goals").get_json()["setup_fields"]
+        self.assertEqual(
+            [field["key"] for field in fields], ["deadlines", "disciplines", "daily_practice"]
+        )
+
     def test_generate_requires_four_answered_questions(self):
         self.client.post("/api/onboarding/goals", json={"goals": ["Build good systems"]})
         response = self.client.post(

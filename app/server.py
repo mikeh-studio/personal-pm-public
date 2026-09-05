@@ -30,11 +30,12 @@ from parser import (
     parse_recent_drive_docs,
     parse_today,
     parse_weekly_focus,
-    set_overall_goals,
+    set_goal_context,
     toggle_task,
     update_feedback,
 )
 from paths import data_dir
+from pm_core.goals import missing_setup_fields
 from token_usage import (
     append_jsonl,
     codex_display_lines,
@@ -311,7 +312,7 @@ def api_today():
 
 @app.route("/api/goals")
 def api_goals():
-    return jsonify(parse_goals())
+    return jsonify(parse_goals() or {"overall_goals": [], "setup_fields": missing_setup_fields("")})
 
 
 @app.route("/api/projects")
@@ -692,13 +693,15 @@ def _onboarding_goals_ready():
 @app.route("/api/onboarding/goals", methods=["POST"])
 def api_onboarding_goals():
     body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "Expected goal setup fields."}), 400
     goals = body.get("goals", [])
     if not isinstance(goals, list):
         return jsonify({"ok": False, "error": "Goals must be a list."}), 400
     non_empty_goals = [goal for goal in goals if str(goal or "").strip()]
     if len(non_empty_goals) > 12:
         return jsonify({"ok": False, "error": "Keep the goal list to 12 items or fewer."}), 400
-    ok, error = set_overall_goals(non_empty_goals)
+    ok, error = set_goal_context(non_empty_goals, body.get("context"))
     if not ok:
         return jsonify({"ok": False, "error": error or "Could not save goals."}), 400
     return jsonify({"ok": True, "goals": parse_goals()})

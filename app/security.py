@@ -1,14 +1,28 @@
 """Local-browser sessions and same-origin mutation protection."""
 
+import hashlib
 import hmac
 import secrets
 from urllib.parse import urlsplit
 
 from flask import jsonify, request, session
+from flask.sessions import SecureCookieSessionInterface
+
+
+class WorkspaceSessions(SecureCookieSessionInterface):
+    def get_cookie_name(self, app):
+        from paths import data_dir
+
+        # Browser cookies ignore ports; isolate workspaces and server instances
+        # without putting a private filesystem path into the cookie name.
+        identity = f"{data_dir()}\n{request.host}"
+        suffix = hashlib.sha256(identity.encode()).hexdigest()[:24]
+        return f"pm_session_{suffix}"
 
 
 def install(app):
     app.secret_key = secrets.token_bytes(32)
+    app.session_interface = WorkspaceSessions()
     app.config.update(
         SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Strict", MAX_CONTENT_LENGTH=160_000
     )

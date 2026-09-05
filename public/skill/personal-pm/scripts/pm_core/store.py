@@ -83,7 +83,11 @@ def parse_today():
     if not path.exists():
         return None
 
-    text = path.read_text()
+    return parse_today_text(path.read_text())
+
+
+def parse_today_text(text):
+    """Parse a draft with the same rules as the saved daily plan."""
     result = {
         "raw": text,
         "date": None,
@@ -163,7 +167,14 @@ def parse_goals():
         return None
     text = path.read_text()
 
-    result = {"overall_goals": [], "deadlines": [], "disciplines": []}
+    from .goals import missing_setup_fields
+
+    result = {
+        "overall_goals": [],
+        "deadlines": [],
+        "disciplines": [],
+        "setup_fields": missing_setup_fields(text),
+    }
 
     goal_section = re.search(r"## Overall Goals\s*\n(.*?)(?=\n##|\Z)", text, re.DOTALL)
     if goal_section:
@@ -208,25 +219,41 @@ def _sanitize_goal_items(goals):
 
 def set_overall_goals(goals):
     """Create or replace the ## Overall Goals section in goals/goal.md, preserving the rest."""
+    return set_goal_context(goals)
+
+
+def set_goal_context(goals, context=None):
+    """Save user-supplied setup fields together, preserving all other sections."""
+    from .goals import setup_sections, validate_goal_text
+
     items = _sanitize_goal_items(goals)
     if not items:
         return False, "Add at least one goal."
-
-    body = "## Overall Goals\n" + "\n".join(f"* {goal}" for goal in items) + "\n"
+    try:
+        sections = setup_sections(context) if context is not None else {}
+    except ValueError as exc:
+        return False, str(exc)
+    sections = {"Overall Goals": "\n".join(f"* {goal}" for goal in items), **sections}
 
     with _file_lock:
         path = data_path("goals", "goal.md")
-        if path.exists():
-            text = path.read_text()
-            pattern = re.compile(r"## Overall Goals[^\n]*\n.*?(?=\n## |\Z)", re.DOTALL)
-            if pattern.search(text):
-                new_text = pattern.sub(lambda _m: body.rstrip("\n") + "\n", text, count=1)
+        new_text = path.read_text() if path.exists() else ""
+        for heading, content in sections.items():
+            body = f"## {heading}\n{content}\n"
+            pattern = re.compile(
+                rf"^## {re.escape(heading)}[^\n]*\n.*?(?=^## |\Z)", re.MULTILINE | re.DOTALL
+            )
+            if pattern.search(new_text):
+                new_text = pattern.sub(
+                    lambda _m, replacement=body: replacement + "\n", new_text, count=1
+                )
             else:
-                new_text = body + "\n" + text.lstrip("\n")
-        else:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            new_text = body
-
+                new_text = new_text.rstrip() + ("\n\n" if new_text else "") + body
+        if context is not None:
+            errors = validate_goal_text(new_text)
+            if errors:
+                return False, "; ".join(errors)
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(new_text.rstrip("\n") + "\n")
         return True, ""
 

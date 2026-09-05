@@ -10,6 +10,27 @@ REQUIRED_GOAL_SECTIONS = [
     "Suggested Daily Practice",
 ]
 
+SETUP_FIELDS = (
+    {
+        "key": "deadlines",
+        "heading": "Current Near-Term Deadlines",
+        "label": "Near-term deadlines",
+        "help": "One per line. If there are none, write 'No fixed deadlines'.",
+    },
+    {
+        "key": "disciplines",
+        "heading": "Key Disciplines",
+        "label": "Relevant disciplines",
+        "help": "One per line, optionally followed by why it matters: Data engineering — Build reliable reports.",
+    },
+    {
+        "key": "daily_practice",
+        "heading": "Suggested Daily Practice",
+        "label": "Daily practice preferences",
+        "help": "Describe a useful practice and any time or energy limits. One per line.",
+    },
+)
+
 PLACEHOLDER_RE = re.compile(
     r"^(tbd|todo|placeholder|none|n/a|na|\[.*\]|\{\{.*\}\})$", re.IGNORECASE
 )
@@ -38,8 +59,11 @@ def has_meaningful_content(body: str) -> bool:
 
 
 def validate_goal_file(path: Path) -> list[str]:
+    return validate_goal_text(path.read_text(encoding="utf-8"))
+
+
+def validate_goal_text(text: str) -> list[str]:
     errors = []
-    text = path.read_text(encoding="utf-8")
     for heading in REQUIRED_GOAL_SECTIONS:
         body = section_body(text, heading)
         if not body:
@@ -47,3 +71,37 @@ def validate_goal_file(path: Path) -> list[str]:
         elif not has_meaningful_content(body):
             errors.append(f"goals/goal.md: section '{heading}' is placeholder-only")
     return errors
+
+
+def missing_setup_fields(text):
+    return [
+        dict(field)
+        for field in SETUP_FIELDS
+        if not has_meaningful_content(section_body(text, field["heading"]))
+    ]
+
+
+def setup_sections(context):
+    if not isinstance(context, dict) or set(context) - {field["key"] for field in SETUP_FIELDS}:
+        raise ValueError("Expected deadlines, disciplines, and daily practice context.")
+    sections = {}
+    for field in SETUP_FIELDS:
+        if field["key"] not in context:
+            continue
+        value = context[field["key"]]
+        if not isinstance(value, str) or len(value) > 4000 or "\x00" in value:
+            raise ValueError(f"{field['label']} must be text of at most 4000 characters.")
+        lines = [
+            " ".join(line.split()).lstrip("*-• ") for line in value.splitlines() if line.strip()
+        ]
+        if not has_meaningful_content("\n".join(lines)):
+            raise ValueError(f"Add {field['label'].lower()} before continuing.")
+        if field["key"] == "disciplines":
+            rows = ["| Discipline Area | Why It Matters |", "| --- | --- |"]
+            for line in lines:
+                name, _, reason = line.replace("|", "/").partition(" — ")
+                rows.append(f"| {name} | {reason} |")
+            sections[field["heading"]] = "\n".join(rows)
+        else:
+            sections[field["heading"]] = "\n".join(f"* {line}" for line in lines)
+    return sections

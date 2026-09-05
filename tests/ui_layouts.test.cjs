@@ -18,6 +18,7 @@ function harness(fixture = {}) {
         setAttribute(name, value) { this.attributes[name] = value; },
         removeAttribute(name) { delete this.attributes[name]; },
         focus() { this.focused = true; },
+        querySelector() { return null; },
       });
     }
     return nodes.get(selector);
@@ -42,6 +43,35 @@ function harness(fixture = {}) {
   vm.runInContext('Object.assign(state, fixture); driveDocsData = {docs: []};', context);
   return { run: script => vm.runInContext(script, context), node };
 }
+
+test('onboarding renders and retains missing context while editing goals', () => {
+  const h = harness({goals: {overall_goals: ['Learn a language'], setup_fields: [
+    {key: 'deadlines', label: 'Near-term deadlines', help: 'State any deadline'},
+    {key: 'daily_practice', label: 'Daily practice preferences', help: 'Keep it small'},
+  ]}});
+  h.run(`openOnboarding('2026-09-07')`);
+  let html = h.node('.onboarding-overlay').innerHTML;
+  assert.match(html, /id="onb-context-deadlines"/);
+  assert.match(html, /id="onb-context-daily_practice"/);
+  assert.doesNotMatch(html, /id="onb-context-disciplines"/);
+  h.node('#onb-goal-0').value = 'Learn a language';
+  h.node('#onb-context-deadlines').value = 'No fixed deadlines';
+  h.node('#onb-context-daily_practice').value = '<img src=x onerror=alert(1)>';
+  h.run('addOnboardingGoal()');
+  html = h.node('.onboarding-overlay').innerHTML;
+  assert.match(html, /No fixed deadlines/);
+  assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.equal(h.run('_onboardingState.contextDraft.deadlines'), 'No fixed deadlines');
+});
+
+test('existing weekly focus still prompts for missing goal context', () => {
+  const h = harness({goals: {overall_goals: ['Learn'], setup_fields: [{key: 'daily_practice'}]}});
+  h.run('state.weekly = {weeks: [{week_of: defaultWeekOf()}]}');
+  assert.equal(h.run('needsOnboarding().need'), true);
+  assert.equal(h.run('needsOnboarding().needWeekly'), false);
+  h.run('state.goals.setup_fields = []');
+  assert.equal(h.run('needsOnboarding().need'), false);
+});
 
 const projects = [
   { name: 'Archived work', priority: 'Later', status: 'Closed', notes: 'Keep history' },

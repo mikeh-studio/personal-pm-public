@@ -313,11 +313,11 @@ If port `5151` is busy, rerun the command with another local port.
 
 ## Guided Weekly Setup
 
-The app provides an optional interface to the [shared weekly planning contract](public/skill/personal-pm/references/weekly-planning.md). The skill can perform this workflow directly in conversation. The app helps you manage goals and set a weekly focus on first launch. When the Today view loads and there is no weekly focus for the current week (or `goals/goal.md` has no overall goals), it shows a two-stage guided setup.
+The app provides an optional interface to the [shared weekly planning contract](public/skill/personal-pm/references/weekly-planning.md). The skill can perform this workflow directly in conversation. The app helps you manage goals and set a weekly focus on first launch. When the Today view loads and there is no weekly focus for the current week, no overall goals, or required goal context is missing, it shows a two-stage guided setup.
 
 How it works:
 
-1. Review, add, edit, or remove overall goals. The server saves them to `goals/goal.md` while preserving the file's deadline and discipline sections.
+1. Review, add, edit, or remove overall goals. Fill any missing deadlines, relevant disciplines, and daily practice preferences; an explicit "No fixed deadlines" is valid. The server validates these fields together before saving to `goals/goal.md` and preserves existing context and other sections.
 2. The app frames the decision as "What do you want to work on this week?" and provides guidance to choose 2-4 outcomes, account for commitments and capacity, name blockers and trade-offs, and define what done looks like.
 3. Pick a local CLI or a configured API from the same provider menu as "Run Today's Flow". Codex is the default.
 4. The app asks that provider for 6-8 questions grounded in the saved goals and active projects. Every question includes answer guidance and a concrete example.
@@ -335,15 +335,15 @@ Configuration:
 
 Endpoints (`POST`, JSON body, default `provider` is `codex`; APIs use `api:openai`, `api:xai`, `api:openrouter`, or `api:sakana`):
 
-The browser bootstraps `/api/session`, then sends its session cookie and `X-PM-CSRF` token on mutations. `/api/health` is the read-only launcher probe.
+The browser bootstraps `/api/session`, then sends its session cookie and `X-PM-CSRF` token on mutations. Cookie names are scoped to the workspace and server address, allowing multiple local workspaces in the same browser. `/api/health` is the read-only launcher probe.
 
 ```text
-/api/onboarding/goals       { "goals": ["...", "..."] }
+/api/onboarding/goals       { "goals": ["...", "..."], "context": { "deadlines": "...", "disciplines": "...", "daily_practice": "..." } }
 /api/onboarding/questions   { "provider": "codex|claude|gemini" }
 /api/onboarding/generate    { "provider": "...", "answers": [ { "label": "...", "answer": "..." } ] }
 ```
 
-`goals` returns `{ ok, goals }`. `questions` returns `{ ok, provider, questions: [...] }`. `generate` requires four non-empty answers, validates and persists the focus, then returns `{ ok, provider, weekly, goals }`. Weekly endpoints return `409` until at least one goal has been saved. An unsupported provider returns `400`; a CLI/parse/timeout failure returns `502` with a readable `error`.
+`goals` returns `{ ok, goals }`, including `goals.setup_fields` for missing context. The UI submits only missing context fields; saved sections are preserved. Legacy goal-only requests may omit `context`, but daily planning still requires complete goal context. `questions` returns `{ ok, provider, questions: [...] }`. `generate` requires four non-empty answers, validates and persists the focus, then returns `{ ok, provider, weekly, goals }`. Weekly endpoints return `409` until at least one goal has been saved. An unsupported provider returns `400`; a CLI/parse/timeout failure returns `502` with a readable `error`.
 
 ## Run The Demo
 

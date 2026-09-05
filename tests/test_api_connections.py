@@ -4,6 +4,7 @@ import csv
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -340,6 +341,114 @@ class ApiConnectionTests(unittest.TestCase):
         before = self.snapshot()
         self.assertEqual(self.draft(self.result()).status_code, 400)
         self.assertEqual(before, self.snapshot())
+
+    def test_feedback_must_survive_in_its_original_field(self):
+        (self.root / "tasks").mkdir()
+        current = self.plan().replace("- What worked:", "- What worked: Short scope")
+        (self.root / "tasks/today.md").write_text(current)
+        before = self.snapshot()
+        for draft in (
+            self.plan().replace("- Time is unconfirmed.", "- Short scope"),
+            self.plan().replace("- What did not work:", "- What did not work: Short scope"),
+        ):
+            with self.subTest(draft=draft):
+                response = self.draft(self.result(markdown=draft))
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("feedback", response.get_json()["error"])
+                self.assertEqual(before, self.snapshot())
+        token = self.draft(self.result(markdown=current)).get_json()["draft_id"]
+        self.assertEqual(
+            self.client.post("/api/plan/apply", json={"draft_id": token}).status_code, 200
+        )
+        self.assertEqual(
+            self.client.get("/api/today").get_json()["feedback"]["worked"], "Short scope"
+        )
+
+    def test_completed_work_cannot_be_moved_out_of_the_tasks_section(self):
+        (self.root / "tasks").mkdir()
+        current = self.plan().replace("- [ ]", "- [x]")
+        (self.root / "tasks/today.md").write_text(current)
+        completed = next(line for line in current.splitlines() if line.startswith("- [x]"))
+        draft = self.plan(task="A new next action").replace("- Time is unconfirmed.", completed)
+        before = self.snapshot()
+        self.assertEqual(self.draft(self.result(markdown=draft)).status_code, 400)
+        self.assertEqual(before, self.snapshot())
+
+    def test_draft_uses_post_rollover_limits_without_writing_history(self):
+        (self.root / "tasks").mkdir()
+        previous = self.plan(day="2026-09-06").replace(
+            "sub:data_foundation", "sub:data_foundation | outcome:incomplete"
+        )
+        (self.root / "tasks/today.md").write_text(previous)
+        tasks = "\n".join(
+            f"- [ ] [P{1 if i == 0 else 2}] [30m] Sample action {i} | type:skill_practice | goal:data_owner | sub:data_foundation"
+            for i in range(5)
+        )
+        line = next(line for line in self.plan().splitlines() if line.startswith("- [ ]"))
+        oversized = self.plan().replace(line, tasks)
+        before = self.snapshot()
+        with patch.object(
+            api_provider, "generate_json", return_value=self.result(markdown=oversized)
+        ) as model:
+            response = self.client.post(
+                "/api/plan/draft", json={"provider": "openai", "context": "150 minutes"}
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("at most 4", model.call_args.args[1])
+        self.assertIn("at most 4", response.get_json()["error"])
+        self.assertEqual(before, self.snapshot())
+        token = self.draft(self.result()).get_json()["draft_id"]
+        self.assertEqual(before, self.snapshot())
+        applied = self.client.post("/api/plan/apply", json={"draft_id": token})
+        self.assertEqual(applied.status_code, 200, applied.get_json())
+        self.assertEqual(self.client.get("/api/today").get_json()["date"], DAY)
+        self.assertEqual((self.root / "tasks/archive/log.md").read_text().count("## 2026-09-06"), 1)
+
+    def test_fresh_onboarding_unlocks_daily_drafting_and_apply(self):
+        shutil.copytree(REPO / "templates", self.root, dirs_exist_ok=True)
+        starter = self.root / "tasks/today.md"
+        starter.write_text(starter.read_text().replace("{{YYYY-MM-DD}}", "2026-09-06"))
+        fields = self.client.get("/api/goals").get_json()["setup_fields"]
+        self.assertEqual(
+            {field["key"] for field in fields}, {"deadlines", "disciplines", "daily_practice"}
+        )
+        saved = self.client.post(
+            "/api/onboarding/goals",
+            json={
+                "goals": ["Learn data engineering"],
+                "context": {
+                    "deadlines": "No fixed deadlines",
+                    "disciplines": "Data engineering — Build reliable reports",
+                    "daily_practice": "One small query in 20 minutes",
+                },
+            },
+        )
+        self.assertEqual(saved.status_code, 200, saved.get_json())
+        self.assertEqual(saved.get_json()["goals"]["setup_fields"], [])
+        weekly = {
+            "weekly": {
+                "why": "Practice",
+                "priorities": ["Run one small query"],
+                "notes": "20 minutes daily",
+            }
+        }
+        with patch.object(api_provider, "generate_json", return_value=weekly):
+            response = self.client.post(
+                "/api/onboarding/generate",
+                json={
+                    "provider": "api:openai",
+                    "answers": [{"label": str(i), "answer": "Specific answer"} for i in range(4)],
+                },
+            )
+        self.assertEqual(response.status_code, 200, response.get_json())
+        draft = self.draft(self.result())
+        self.assertEqual(draft.status_code, 200, draft.get_json())
+        applied = self.client.post(
+            "/api/plan/apply", json={"draft_id": draft.get_json()["draft_id"]}
+        )
+        self.assertEqual(applied.status_code, 200, applied.get_json())
+        self.assertEqual(self.client.get("/api/today").get_json()["date"], DAY)
+        self.assertNotIn("2026-09-06", (self.root / "tasks/archive/log.md").read_text())
 
     def test_weekly_api_uses_shared_contract_and_never_starts_cli(self):
         self.save()
